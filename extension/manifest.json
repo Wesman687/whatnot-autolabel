@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Whatnot Auto Print",
+  "version": "1.0",
+  "description": "Automatically detects Whatnot wins and sends them to the local printing server.",
+  "icons": {
+    "128": "icon128.png"
+  },
+  "permissions": ["scripting", "activeTab", "tabs", "background"],
+  "host_permissions": ["http://localhost:7777/*", "https://*.whatnot.com/*"],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.whatnot.com/live/*",
+        "https://whatnot.com/live/*",
+        "https://www.whatnot.com/dashboard/live/*",
+        "https://whatnot.com/dashboard/live/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

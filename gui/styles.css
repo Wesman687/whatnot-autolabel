@@ -1,0 +1,391 @@
+body {
+    background-color: #0D0D0D;
+    color: #D4AF37;
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 15px;
+    box-sizing: border-box;
+}
+
+h1 {
+    text-align: center;
+    margin: 10px 0 20px 0;
+    font-size: 24px;
+}
+
+h2 {
+    font-size: 16px;
+    margin: 15px 0 10px 0;
+}
+
+.status-line {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+    padding: 10px 15px;
+    border: 1px solid #D4AF37;
+    background: #1a1a1a;
+    border-radius: 5px;
+}
+
+.checkbox-label {
+    font-size: 14px;
+    margin: 0;
+}
+
+.status-indicators {
+    display: flex;
+    gap: 8px;
+}
+
+.status-indicator {
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 3px;
+    background: #333;
+    border: 1px solid #555;
+    min-width: 70px;
+    text-align: center;
+}
+/* Section spacing */
+.show-management, .print-options, .controls, .search-container, .exclusion-container {
+    margin-bottom: 15px;
+    padding: 12px 15px;
+    border: 1px solid #D4AF37;
+    background: #1a1a1a;
+    border-radius: 5px;
+}
+
+/* Show Management */
+.show-management {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.show-management label {
+    font-size: 14px;
+    margin: 0;
+    white-space: nowrap;
+    min-width: 90px;
+}
+
+#currentShowName {
+    padding: 6px 10px;
+    background: #333;
+    color: #D4AF37;
+    border: 1px solid #D4AF37;
+    border-radius: 3px;
+    flex: 1;
+    max-width: 200px;
+    font-weight: bold;
+}
+
+.show-management button {
+    padding: 6px 12px;
+    font-size: 12px;
+    border: 1px solid #D4AF37;
+    background: transparent;
+    color: #D4AF37;
+    border-radius: 3px;
+    cursor: pointer;
+    white-space: nowrap;
+    min-width: 85px;
+}
+
+/* Print Options */
+.print-options {
+    text-align: left;
+}
+
+.print-options label {
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Controls */
+.controls {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.controls button {
+    padding: 8px 16px;
+    border: 1px solid #D4AF37;
+    background: transparent;
+    color: #D4AF37;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+/* Search */
+.search-container {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.search-container input {
+    flex: 1;
+    padding: 8px 12px;
+    background: #333;
+    color: #D4AF37;
+    border: 1px solid #D4AF37;
+    border-radius: 3px;
+}
+
+.search-container button {
+    padding: 8px 16px;
+    border: 1px solid #D4AF37;
+    background: transparent;
+    color: #D4AF37;
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+/* Exclusions */
+.exclusion-container label {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 14px;
+}
+
+.exclusion-container input {
+    width: 100%;
+    padding: 8px 12px;
+    background: #333;
+    color: #D4AF37;
+    border: 1px solid #D4AF37;
+    border-radius: 3px;
+    margin-bottom: 10px;
+    box-sizing: border-box;
+}
+
+.exclusion-container button {
+    padding: 6px 12px;
+    margin-right: 8px;
+    border: 1px solid #D4AF37;
+    background: transparent;
+    color: #D4AF37;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.current-exclusions {
+    margin-top: 10px;
+    padding: 8px 12px;
+    background: #333;
+    border: 1px solid #555;
+    border-radius: 3px;
+    font-size: 12px;
+    min-height: 20px;
+}
+
+.current-exclusions em {
+    color: #888;
+    font-style: italic;
+}
+
+.exclusion-tag {
+    display: inline-block;
+    background: #D4AF37;
+    color: #0D0D0D;
+    padding: 3px 8px;
+    margin: 2px;
+    border-radius: 3px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s;
+    user-select: none;
+}
+
+.exclusion-tag:hover {
+    background: #ff6b6b;
+    color: white;
+    transform: scale(1.05);
+}
+/* Results and Log */
+.results {
+    margin-bottom: 15px;
+}
+
+.result-row {
+    padding: 10px;
+    margin: 5px 0;
+    border: 1px solid #333;
+    background: #1a1a1a;
+    border-radius: 3px;
+}
+.log-window {
+    background: #111;
+    border: 1px solid #D4AF37;
+    height: 150px;
+    overflow-y: scroll;
+    padding: 5px;
+    text-align:left;
+}
+.results {
+    text-align:left;
+    max-height:150px;
+    overflow-y:auto;
+    border:1px solid #D4AF37;
+    margin-bottom:20px;
+    padding:5px;
+}
+.result-row {
+    padding:3px;
+    border-bottom:1px solid #333;
+}
+
+.checkbox-container {
+    display: inline-block;
+    margin: 5px;
+    font-size: 14px;
+}
+
+.checkbox-container input[type="checkbox"] {
+    width: auto;
+    margin-right: 8px;
+    transform: scale(1.2);
+}
+
+.checkbox-container label {
+    display: inline-flex;
+    align-items: center;
+    cursor: pointer;
+    color: #D4AF37;
+}
+
+#recentWins {
+    max-height: 200px;
+    overflow-y: auto;
+    background: #111;
+    border: 1px solid #D4AF37;
+    border-radius: 4px;
+    padding: 10px;
+    text-align: left;
+    margin-top: 10px;
+}
+
+.log-window {
+    background: #111;
+    border: 1px solid #D4AF37;
+    height: 120px;
+    overflow-y: scroll;
+    padding: 10px;
+    text-align: left;
+    font-family: monospace;
+    font-size: 12px;
+    border-radius: 3px;
+    margin-bottom: 15px;
+}
+
+/* Recent wins styling */
+#recentWins {
+    margin: 10px 0;
+    padding: 10px;
+    border: 1px solid #D4AF37;
+    background: #111;
+    min-height: 80px;
+    border-radius: 3px;
+    font-size: 14px;
+}
+
+#recentWins div {
+    color: #D4AF37;
+    padding: 8px;
+    border-bottom: 1px solid #333;
+    margin-bottom: 5px;
+}
+
+#recentWins small {
+    color: #888;
+}
+
+#recentWins em {
+    color: #666;
+    font-style: italic;
+}
+
+/* Button hover effects */
+button:hover, .show-management button:hover, .controls button:hover, 
+.search-container button:hover, .exclusion-container button:hover {
+    background: #D4AF37;
+    color: #0D0D0D;
+    transition: all 0.2s;
+}
+
+/* Input focus effects */
+input:focus, select:focus {
+    outline: none;
+    box-shadow: 0 0 5px rgba(212, 175, 55, 0.5);
+}
+
+/* Modal styles */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.8);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.modal-content {
+    background: #1a1a1a;
+    border: 2px solid #D4AF37;
+    border-radius: 5px;
+    padding: 20px;
+    max-width: 400px;
+    width: 90%;
+}
+
+.modal-content h3 {
+    margin: 0 0 15px 0;
+    color: #D4AF37;
+    text-align: center;
+}
+
+.modal-content label {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 14px;
+}
+
+.modal-content input {
+    width: 100%;
+    padding: 8px 12px;
+    background: #333;
+    color: #D4AF37;
+    border: 1px solid #D4AF37;
+    border-radius: 3px;
+    margin-bottom: 15px;
+    box-sizing: border-box;
+}
+
+.modal-buttons {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+}
+
+.modal-buttons button {
+    padding: 8px 16px;
+    border: 1px solid #D4AF37;
+    background: transparent;
+    color: #D4AF37;
+    border-radius: 3px;
+    cursor: pointer;
+}

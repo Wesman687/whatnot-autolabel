@@ -1,0 +1,79 @@
+<html>
+<head>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="status-line">
+        <label class="checkbox-label">
+            <input type="checkbox" id="alwaysOnTopCheckbox"> Always On Top
+        </label>
+        <div class="status-indicators">
+            <span id="serverStatus" class="status-indicator">Server: UNKNOWN</span>
+            <span id="extensionStatus" class="status-indicator">Extension: UNKNOWN</span>
+            <span id="printingStatus" class="status-indicator">Printing: UNKNOWN</span>
+        </div>
+    </div>
+    
+    <h1>Whatnot AutoPrint</h1>
+
+    <div class="show-management">
+        <label>Current Show:</label>
+        <span id="currentShowName">Default Show</span>
+        <button id="newShowBtn">New Show</button>
+        <button id="endShowBtn">End Show</button>
+    </div>
+
+    <div class="print-options">
+        <label>
+            <input type="checkbox" id="printGiveawaysCheckbox" checked> Print Giveaways
+        </label>
+    </div>
+
+    <div class="controls">
+        <button id="pauseBtn">Pause</button>
+        <button id="printLastBtn">Print Last</button>
+        <button id="testBtn">Test Print</button>
+        <button id="resetBtn">Reset/Clear All</button>
+    </div>
+
+    <div class="search-container">
+        <input id="searchBox" placeholder="Search labels..." />
+        <button id="searchBtn">Search</button>
+    </div>
+
+    <div class="exclusion-container">
+        <label for="exclusionBox">Exclude items containing (comma separated):</label>
+        <input id="exclusionBox" placeholder="e.g. silver grams, silver dimes, mercury" />
+        <button id="saveExclusionsBtn">Save Exclusions</button>
+        <button id="clearExclusionsBtn">Clear All</button>
+        <div id="currentExclusions" class="current-exclusions">
+            <em>No exclusions set</em>
+        </div>
+    </div>
+
+    <div id="results" class="results"></div>
+
+    <h2 id="recentWinsHeader">All Wins</h2>
+    <div id="recentWins" style="margin: 10px 0; padding: 10px; border: 1px solid #D4AF37; background: #111; min-height: 100px; max-height: 300px; overflow-y: auto;">
+        <em>No wins detected yet...</em>
+    </div>
+    
+    <h2>Event Log</h2>
+    <div id="logWindow" class="log-window"></div>
+
+    <!-- New Show Modal -->
+    <div id="newShowModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <h3>Create New Show</h3>
+            <label for="newShowName">Show Name:</label>
+            <input type="text" id="newShowName" placeholder="Enter show name..." />
+            <div class="modal-buttons">
+                <button id="createShowBtn">Create</button>
+                <button id="cancelShowBtn">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="renderer.js"></script>
+</body>
+</html>

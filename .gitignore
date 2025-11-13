@@ -1,0 +1,7 @@
+﻿node_modules/
+.venv/
+*.log
+labels/*.json
+server/labels/
+server/config.json
+.env
