@@ -87,13 +87,7 @@ app.post('/event', (req, res) => {
     const cfg = loadConfig();
     const { type, name, item, price } = req.body;
 
-    console.log("🎯 WIN EVENT RECEIVED:", { type, name, item, price });
-    console.log("💰 SERVER PRICE DEBUG:", {
-        priceValue: price,
-        priceType: typeof price,
-        priceInBody: 'price' in req.body,
-        fullBody: req.body
-    });
+    console.log(`🎯 ${type.toUpperCase()}: ${name} - ${item}${price ? ' - ' + price : ''}`);
     
     // SERVER-SIDE DUPLICATE DETECTION - NO DUPLICATES EVER
     const existingLabels = getLabels();
@@ -114,9 +108,7 @@ app.post('/event', (req, res) => {
     });
     
     if (duplicate) {
-        console.log("🚫 DUPLICATE WIN DETECTED - REJECTING:");
-        console.log(`   Existing: ${duplicate.name} - ${duplicate.item} - ${duplicate.price || 'no price'} (${new Date(duplicate.timestamp).toLocaleString()})`);
-        console.log(`   New:      ${name} - ${item} - ${price || 'no price'}`);
+        console.log("🚫 DUPLICATE - ignored");
         res.json({ status: "duplicate", reason: "Exact duplicate already exists" });
         return;
     }
@@ -145,24 +137,24 @@ app.post('/event', (req, res) => {
     saveLabel(labelObj);
 
     if (isExcluded) {
-        console.log("🚫 Item excluded from printing:", item, "- matches exclusion patterns");
+        console.log("🚫 EXCLUDED:", item);
         res.json({ status: "excluded", reason: "Item matches exclusion filter" });
         return;
     }
 
     // Check giveaway printing setting
     if (type === 'giveaway' && !cfg.print_giveaways) {
-        console.log("🎁 Giveaway excluded from printing - giveaway printing disabled");
+        console.log("🎁 GIVEAWAY EXCLUDED - printing disabled");
         res.json({ status: "excluded", reason: "Giveaway printing disabled" });
         return;
     }
 
     if (cfg.printing_enabled) {
-        console.log("📄 Printing enabled - sending to printer");
+        console.log("✅ PRINTING");
         const printer = require('./printer');
         printer.printLabel(labelObj);
     } else {
-        console.log("⏸️ Printing paused - win logged but not printed");
+        console.log("⏸️ PAUSED - logged only");
     }
 
     res.json({ status: "ok" });
@@ -264,6 +256,37 @@ app.post('/reprint', (req, res) => {
     });
     
     res.json({ status: "reprint sent" });
+});
+
+// Manual print - bypasses pause setting (for extension print buttons)
+app.post('/manual-print', (req, res) => {
+    const cfg = loadConfig();
+    const { type, name, item, price } = req.body;
+    
+    // Check if there's an active show
+    if (!cfg.current_show || !cfg.shows[cfg.current_show]) {
+        res.json({ status: "no_active_show", reason: "No active show - create a new show first" });
+        return;
+    }
+    
+    // Create label object
+    const labelObj = {
+        type: type,
+        name: name,
+        item: item, 
+        price: price,
+        timestamp: Date.now(),
+        manual: true
+    };
+    
+    // Save to labels (even if paused)
+    saveLabel(labelObj);
+    
+    // ALWAYS PRINT for manual requests (ignore pause setting)
+    const printer = require('./printer');
+    printer.printLabel(labelObj);
+    
+    res.json({ status: "manual_print_sent" });
 });
 
 // Simple health check endpoint

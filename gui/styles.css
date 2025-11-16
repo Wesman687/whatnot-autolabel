@@ -4,6 +4,7 @@ body {
     font-family: Arial, sans-serif;
     margin: 0;
     padding: 15px;
+    padding-top: 10px; /* Reduced top padding since status bar is sticky */
     box-sizing: border-box;
 }
 
@@ -27,6 +28,10 @@ h2 {
     border: 1px solid #D4AF37;
     background: #1a1a1a;
     border-radius: 5px;
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
 }
 
 .checkbox-label {

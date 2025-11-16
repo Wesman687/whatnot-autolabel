@@ -18,11 +18,7 @@ module.exports.printLabel = function (data) {
     const item = data.item || "Whatnot Item";
     const price = data.price || null;
 
-    console.log("=== PRINTING LABEL VIA PYTHON ===");
-    console.log(`Buyer: ${buyer}`);
-    console.log(`Item: ${item}`);
-    console.log(`Price: ${price || 'N/A'}`);
-    console.log("=================================");
+    console.log(`🖨 PRINT: ${buyer} - ${item}${price ? ' - ' + price : ''}`);
 
     // Get the path to the Python script and venv Python executable
     const pythonScript = path.join(__dirname, "..", "print-label.py");
@@ -34,20 +30,11 @@ module.exports.printLabel = function (data) {
         command += ` "${price}"`;
     }
     
-    console.log(`🖨 Running: ${command}`);
-
     exec(command, (err, stdout, stderr) => {
         if (err) {
-            console.log("❌ PYTHON PRINT ERROR:", err.message);
-            console.log("❗ stderr:", stderr);
-            console.log("❗ Make sure Python is installed and print-label.py exists");
-            console.log("❗ Manual print required:");
-            console.log(`   Buyer: ${buyer}`);
-            console.log(`   Item: ${item}`);
-            console.log(`   Price: ${price || 'N/A'}`);
+            console.log("❌ PRINT FAILED:", err.message);
         } else {
-            console.log("✅ PYTHON PRINT SUCCESS!");
-            if (stdout) console.log("stdout:", stdout);
+            console.log("✅ PRINTED");
         }
     });
 };

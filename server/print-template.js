@@ -4,8 +4,8 @@ module.exports.formatLabel = function (data) {
     const item = (data.item || "").trim();
     
     // --- OPTION A (best fit) ---
-    return `${name}\n${item}\nMiracleCoins.com`;
+    return `${name}\n${item}\nMiracle-Coins.com`;
 
     // --- OPTION B (4-line version) ---
-    // return `${name}\n${item}\nMiracleCoins.com\n@MiracleCoinz`;
+    // return `${name}\n${item}\nMiracle-Coins.com\n@MiracleCoinz`;
 };

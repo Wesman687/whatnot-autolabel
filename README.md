@@ -1,7 +1,9 @@
 # WhatnotAutoPrint - Clean Project Structure
 
 ## 🚀 How to Start
-**Double-click:** `WhatnotAutoPrint.bat` (completely silent startup)
+**Recommended:** Double-click `launch-system.bat` (reliable PowerShell launcher)
+**Alternative:** `WhatnotAutoPrint.bat` (silent VBScript launcher)
+**Debug mode:** Double-click `start-debug.bat` (visible console output)
 
 ## 📁 Project Structure
 

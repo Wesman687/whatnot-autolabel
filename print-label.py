@@ -76,7 +76,7 @@ def print_label(buyer, item, price=None):
         text_lines.append(("item", il, font_item, "left", BUYER_RIGHT_ADJUST))
 
     # Bottom text (bigger + lifted up)
-    text_lines.append(("bottom", "MiracleCoins.com", font_small, "center", 0))
+    text_lines.append(("bottom", "Miracle-Coins.com", font_small, "center", 0))
     text_lines.append(("bottom", "FB: @miraclecoinz", font_small, "center", 0))
 
     # Compute total height
@@ -96,7 +96,7 @@ def print_label(buyer, item, price=None):
 
     # Draw each line
     for (tag, text, font, align, adj), height in zip(text_lines, heights):
-        if tag == "bottom" and text == "MiracleCoins.com":
+        if tag == "bottom" and text == "Miracle-Coins.com":
             y += 6
         bbox = draw.textbbox((0, 0), text, font=font)
         w = bbox[2] - bbox[0]

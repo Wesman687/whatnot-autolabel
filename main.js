@@ -11,7 +11,9 @@ function createWindow() {
         alwaysOnTop: false,
         autoHideMenuBar: true,  // Hide the menu bar
         webPreferences: {
-            preload: path.join(__dirname, 'gui', 'preload.js')  // ✅ FIXED PATH
+            preload: path.join(__dirname, 'gui', 'preload.js'),  // ✅ FIXED PATH
+            nodeIntegration: false,  // Security: disable node integration
+            contextIsolation: true   // Security: enable context isolation
         }
     });
 
@@ -20,8 +22,12 @@ function createWindow() {
 
     // Send initial always-on-top state when window is ready
     win.webContents.once('did-finish-load', () => {
+        console.log("🔧 Window loaded, initial always-on-top state:", win.isAlwaysOnTop());
         const initialState = win.isAlwaysOnTop();
         win.webContents.send("always-top-updated", initialState);
+        
+        // Note: The renderer will sync with server state and may override this
+        console.log("🔧 Sent initial always-top-updated with state:", initialState);
     });
 }
 
@@ -64,16 +70,23 @@ app.whenReady().then(() => {
     });
 
     ipcMain.on('set-always-top', (event, state) => {
-        console.log("🔧 IPC: set-always-top received, state:", state);
+        console.log("🔧 IPC: set-always-top received, state:", state, "type:", typeof state);
         if (!win) {
             console.log("❌ No window available");
             return;
         }
 
         try {
+            console.log("🔧 Current window state before change:", win.isAlwaysOnTop());
             win.setAlwaysOnTop(state);
             const actualState = win.isAlwaysOnTop();
-            console.log("✅ Always On Top set to:", actualState);
+            console.log("✅ Always On Top set to:", actualState, "requested:", state);
+            
+            // Verify the state actually changed
+            if (actualState !== state) {
+                console.log("⚠️  WARNING: Requested state", state, "but actual state is", actualState);
+            }
+            
             win.webContents.send("always-top-updated", actualState);
         } catch (error) {
             console.error("❌ Error setting always on top:", error);

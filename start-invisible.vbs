@@ -14,7 +14,8 @@ End If
 On Error GoTo 0
 
 ' Start server completely hidden (no window at all)
-serverCmd = "cmd /c cd /d """ & scriptDir & "\server"" && node server.js"
+WshShell.CurrentDirectory = scriptDir & "\server"
+serverCmd = "node server.js"
 WshShell.Run serverCmd, 0, False
 
 ' Wait 3 seconds for server to start
