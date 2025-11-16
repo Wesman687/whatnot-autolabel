@@ -872,92 +872,116 @@ try {
 // Inject custom print buttons into item cards
 function injectPrintButtons() {
     try {
-        // Look for item cards in the left sidebar - find ANY item title
+        // Strategy 1: Use flex container selector pattern (works for both sales and giveaways)
+        const flexCards = document.querySelectorAll('.flex.flex-row.gap-4');
         const itemCards = [];
         
-        // Find item cards by looking for elements with buyer/sold information
-        const allElements = document.querySelectorAll('*');
-        allElements.forEach(element => {
-            const text = (element.innerText || element.textContent || '').trim();
-            
-            // Look for item titles - they appear above buyer/price info
-            // Check if this element's parent container has buyer/price info
-            let parentContainer = element.parentElement;
-            for (let i = 0; i < 5 && parentContainer; i++) {
-                const containerText = parentContainer.textContent;
+        flexCards.forEach(card => {
+            // Look for the first meaningful text element that could be a title
+            const textElements = card.querySelectorAll('*');
+            for (const element of textElements) {
+                const text = (element.innerText || element.textContent || '').trim();
                 
-                // If container has buyer AND (payment/sold) info, this might be an item title
-                if (containerText.includes('Buyer:') && 
-                    (containerText.includes('Payment Pending:') || containerText.includes('Sold for'))) {
+                // Check if this looks like an item title
+                if (text.length > 3 && text.length < 100 && 
+                    !text.includes('Buyer:') && 
+                    !text.includes('Payment') && 
+                    !text.includes('Sold for') &&
+                    !text.includes('Qty:') &&
+                    !text.includes('$') &&
+                    !text.match(/^\d+$/)) {  // Skip pure numbers
                     
-                    // Make sure this element looks like a title (short, meaningful text)
-                    if (text.length > 5 && text.length < 80 && 
-                        !text.includes('Buyer:') && 
-                        !text.includes('Payment') && 
-                        !text.includes('Sold for') &&
-                        !text.includes('Qty:')) {
+                    // Verify this card has buyer info (sales and giveaways both have buyers)
+                    const cardText = card.textContent;
+                    if (cardText.includes('Buyer:') && 
+                        (cardText.includes('Payment Pending') || 
+                         cardText.includes('Sold for') || 
+                         cardText.includes('Giveaway') ||
+                         cardText.includes('$0'))) {
                         
-                        itemCards.push(element);
+                        itemCards.push({
+                            titleElement: element,
+                            cardContainer: card,
+                            itemTitle: text
+                        });
                         break;
                     }
                 }
-                parentContainer = parentContainer.parentElement;
             }
         });
         
+        // Strategy 2: Fallback to original method if no flex cards found
+        if (itemCards.length === 0) {
+            const allElements = document.querySelectorAll('*');
+            allElements.forEach(element => {
+                const text = (element.innerText || element.textContent || '').trim();
+                
+                let parentContainer = element.parentElement;
+                for (let i = 0; i < 5 && parentContainer; i++) {
+                    const containerText = parentContainer.textContent;
+                    
+                    if (containerText.includes('Buyer:') && 
+                        (containerText.includes('Payment Pending:') || 
+                         containerText.includes('Sold for') ||
+                         containerText.includes('$0'))) {
+                        
+                        if (text.length > 5 && text.length < 80 && 
+                            !text.includes('Buyer:') && 
+                            !text.includes('Payment') && 
+                            !text.includes('Sold for') &&
+                            !text.includes('Qty:')) {
+                            
+                            itemCards.push({
+                                titleElement: element,
+                                cardContainer: parentContainer,
+                                itemTitle: text
+                            });
+                            break;
+                        }
+                    }
+                    parentContainer = parentContainer.parentElement;
+                }
+            });
+        }
+        
         let buttonsAdded = 0;
         
-        itemCards.forEach((titleElement, index) => {
-            const itemTitle = (titleElement.innerText || titleElement.textContent || '').trim();
-            
-            // Find the item card container - look for the card that contains this title
-            let cardContainer = titleElement;
-            
-            // Go up the DOM to find the main item card container
-            for (let i = 0; i < 10; i++) {
-                if (!cardContainer.parentElement) break;
-                cardContainer = cardContainer.parentElement;
-                
-                // Look for a container that represents the full item card
-                const hasPaymentInfo = cardContainer.textContent.includes('Payment Pending') || cardContainer.textContent.includes('Sold for');
-                const hasItemInfo = cardContainer.textContent.includes(itemTitle);
-                const hasReasonableSize = cardContainer.offsetHeight > 100;
-                
-                if (hasPaymentInfo && hasItemInfo && hasReasonableSize) {
-                    break;
-                }
-            }
+        itemCards.forEach((cardInfo, index) => {
+            const { titleElement, cardContainer, itemTitle } = cardInfo;
             
             // Check if we already added a button to this card
             if (cardContainer.querySelector('.whatnot-autoprint-btn')) {
                 return;
             }
             
-            // Extract buyer and price info from this specific layout
+            // Extract buyer and price info (works for sales, giveaways, and $0 items)
             let buyerName = 'Unknown';
             let salePrice = null;
             
-            // Look for buyer name after "Buyer:" label - be more careful about extraction
             const allText = cardContainer.textContent;
-            // More specific regex to avoid capturing extra text
+            
+            // Extract buyer name - works for all types
             const buyerMatch = allText.match(/Buyer:\s*([a-zA-Z0-9_]+)(?:\s|$|[^a-zA-Z0-9_])/);
             if (buyerMatch) {
                 buyerName = buyerMatch[1];
             } else {
-                // Fallback: look for blue-colored text that might be the buyer name
-                const blueElements = cardContainer.querySelectorAll('*');
-                for (const el of blueElements) {
-                    const style = getComputedStyle(el);
+                // Fallback: look for colored buyer name text
+                const coloredElements = cardContainer.querySelectorAll('*');
+                for (const el of coloredElements) {
                     const text = (el.textContent || '').trim();
-                    if (style.color && (style.color.includes('rgb(59, 130, 246)') || style.color.includes('blue')) && 
-                        text.length > 3 && text.length < 25 && !text.includes('Buyer') && !text.includes('$')) {
+                    // Look for username-like text (short, no spaces, not system text)
+                    if (text.length > 2 && text.length < 25 && 
+                        !text.includes('Buyer') && !text.includes('$') && 
+                        !text.includes('Item') && !text.includes('Qty') &&
+                        !text.includes('Payment') && !text.includes('Sold') &&
+                        text.match(/^[a-zA-Z0-9_]+$/)) {
                         buyerName = text;
                         break;
                     }
                 }
             }
             
-            // Look for payment info - be more specific
+            // Extract price - handle sales, giveaways, and $0 items
             const paymentPendingMatch = allText.match(/Payment Pending:\s*\$(\d+)/);
             const soldForMatch = allText.match(/Sold for\s*\$(\d+)/);
             
@@ -965,6 +989,8 @@ function injectPrintButtons() {
                 salePrice = '$' + paymentPendingMatch[1];
             } else if (soldForMatch) {
                 salePrice = '$' + soldForMatch[1];
+            } else if (allText.includes('$0')) {
+                salePrice = '$0';
             }
             
             // Create the print button - small and inline with title
@@ -1015,11 +1041,13 @@ function injectPrintButtons() {
                 // Determine if this is a giveaway or sale based on price and context
                 let eventType = 'sale';  // Default to sale
                 
-                // Check if it's a giveaway based on:
-                // 1. Price is $0 or no price
-                // 2. Contains giveaway-related text
+                // Check if it's a giveaway based on multiple indicators:
                 const cardText = cardContainer.textContent.toLowerCase();
-                if (!salePrice || salePrice === '$0' || cardText.includes('giveaway')) {
+                if (salePrice === '$0' || 
+                    cardText.includes('giveaway') || 
+                    cardText.includes('givvy') ||
+                    itemTitle.toLowerCase().includes('giveaway') ||
+                    itemTitle.toLowerCase().includes('givvy')) {
                     eventType = 'giveaway';
                 }
                 
