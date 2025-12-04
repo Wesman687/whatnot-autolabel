@@ -354,6 +354,85 @@ function removeExclusion(name) {
 }
 ```
 
+### Chat Announcement Management
+
+#### Chat Announcement Checkbox
+Located in the print options section:
+```html
+<label>
+    <input type="checkbox" id="announceToChatCheckbox"> Announce to Chat
+</label>
+```
+
+**Functionality**:
+- Enables/disables chat announcements globally
+- Saved to `config.announce_to_chat`
+- Synced with server on startup and status polling
+- When enabled, items matching title patterns will be announced to chat
+
+#### Wheel Spin Announcement Checkbox
+Located in the print options section:
+```html
+<label>
+    <input type="checkbox" id="announceWheelSpinsCheckbox" checked> Announce Wheel Spins to Server
+</label>
+```
+
+**Functionality**:
+- Controls whether wheel item buys are sent to wheel server (port 3800)
+- Saved to `config.announce_wheel_spins`
+- Defaults to enabled (checked)
+- When disabled, wheel items won't be sent to wheel server
+
+#### Chat Announcement Title Patterns
+Located below exclusions section:
+```html
+<div class="exclusion-container">
+    <label for="chatAnnounceBox">Announce to chat if title contains (comma separated):</label>
+    <input id="chatAnnounceBox" placeholder="e.g. wheel, wheel spin, giveaway" />
+    <button id="saveChatAnnounceBtn">Save Patterns</button>
+    <button id="clearChatAnnounceBtn">Clear All</button>
+    <div id="currentChatAnnounce" class="current-exclusions">
+        <em>No patterns set</em>
+    </div>
+</div>
+```
+
+**Functionality**:
+- Comma-separated title patterns (e.g., "wheel, wheel spin, giveaway")
+- Case-insensitive substring matching
+- Items matching any pattern will be announced to chat
+- Patterns displayed as clickable tags (click to remove)
+- Saved to `config.chat_announce_patterns`
+
+**Handler Functions**:
+```javascript
+// Save patterns
+document.getElementById('saveChatAnnounceBtn').onclick = () => {
+    const patterns = chatAnnounceBox.value.split(',').map(p => p.trim()).filter(p => p);
+    fetch('http://localhost:7777/chat-announce-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+            announce_to_chat: currentSettings.announce_to_chat,
+            chat_announce_patterns: patterns,
+            announce_wheel_spins: currentSettings.announce_wheel_spins
+        })
+    });
+};
+
+// Load on startup
+function loadChatAnnounceSettings() {
+    fetch('http://localhost:7777/chat-announce-settings')
+    .then(r => r.json())
+    .then(data => {
+        displayChatAnnouncePatterns(data.chat_announce_patterns);
+        document.getElementById('announceToChatCheckbox').checked = data.announce_to_chat || false;
+        document.getElementById('announceWheelSpinsCheckbox').checked = data.announce_wheel_spins !== undefined ? data.announce_wheel_spins : true;
+    });
+}
+```
+
 ### Label Management
 
 #### `displayRecentWins(wins)`

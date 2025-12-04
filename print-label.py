@@ -140,6 +140,32 @@ def print_label(buyer, item, price=None):
     print(f"Label printed for {buyer}: {item}")
 
 
+import json
+from datetime import datetime
+
+def log_debug(source, event_type, data):
+    """Log debug information to file"""
+    try:
+        import os
+        debug_dir = os.path.join(os.path.dirname(__file__), 'server', 'debug-logs')
+        if not os.path.exists(debug_dir):
+            os.makedirs(debug_dir, exist_ok=True)
+        
+        log_file = os.path.join(debug_dir, f"debug-{datetime.now().strftime('%Y-%m-%d')}.log")
+        
+        log_entry = {
+            "timestamp": datetime.now().isoformat(),
+            "source": source,
+            "eventType": event_type,
+            "data": data
+        }
+        
+        with open(log_file, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(log_entry) + '\n')
+    except Exception as e:
+        # Silent failure - don't break printing if logging fails
+        pass
+
 if __name__ == "__main__":
     if len(sys.argv) < 3:
         print("Usage: python print-label.py <buyer> <item> [price]")
@@ -148,4 +174,32 @@ if __name__ == "__main__":
     buyer = sys.argv[1]
     item = sys.argv[2]
     price = sys.argv[3] if len(sys.argv) > 3 else None
+    
+    # Enhanced logging - print to console what we received (ASCII-safe)
+    print(f"[PYTHON] Received: buyer='{buyer}', item='{item}', price='{price}'")
+    print(f"[PYTHON] Argument count: {len(sys.argv)}")
+    print(f"[PYTHON] All arguments: {sys.argv}")
+    
+    # Debug logging - track what Python received
+    log_debug('python', 'print-execution', {
+        'buyer': buyer,
+        'item': item,
+        'price': price,
+        'priceType': type(price).__name__ if price else 'None',
+        'hasPrice': price is not None,
+        'argCount': len(sys.argv),
+        'allArgs': sys.argv
+    })
+    
+    # Validate price format if provided
+    if price:
+        price_str = str(price).strip()
+        if price_str and price_str not in ['null', 'undefined', 'None', '']:
+            print(f"[PYTHON] Price validated: '{price_str}'")
+        else:
+            print(f"[PYTHON] WARNING: Price provided but invalid: '{price_str}'")
+            price = None
+    else:
+        print(f"[PYTHON] WARNING: No price argument provided")
+    
     print_label(buyer, item, price)

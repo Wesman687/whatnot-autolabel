@@ -52,7 +52,11 @@ curl http://localhost:7777/ping
   },
   "has_active_show": true,
   "extension_active": true,
-  "last_extension_heartbeat": 1699920000000
+  "last_extension_heartbeat": 1699920000000,
+  "announce_to_chat": false,
+  "chat_announce_patterns": ["wheel", "wheel spin"],
+  "announce_wheel_spins": true,
+  "pending_wheel_announcements": []
 }
 ```
 
@@ -464,6 +468,173 @@ curl -X POST http://localhost:7777/remove-exclusion \
 
 ---
 
+### 💬 Chat Announcement Settings
+
+#### `GET /chat-announce-settings`
+**Purpose**: Get current chat announcement configuration
+
+**Request**: No parameters
+
+**Response**:
+```json
+{
+  "announce_to_chat": false,
+  "chat_announce_patterns": ["wheel", "wheel spin", "giveaway"],
+  "announce_wheel_spins": true
+}
+```
+
+**Field Descriptions**:
+- `announce_to_chat`: Master enable/disable for chat announcements
+- `chat_announce_patterns`: Array of title patterns to match (case-insensitive)
+- `announce_wheel_spins`: Enable/disable sending wheel buys to wheel server
+
+**Example**:
+```bash
+curl http://localhost:7777/chat-announce-settings
+```
+
+---
+
+#### `POST /chat-announce-settings`
+**Purpose**: Update chat announcement configuration
+
+**Request Body**:
+```json
+{
+  "announce_to_chat": true,
+  "chat_announce_patterns": ["wheel", "wheel spin"],
+  "announce_wheel_spins": true
+}
+```
+
+**Response**:
+```json
+{
+  "status": "chat settings saved",
+  "announce_to_chat": true,
+  "chat_announce_patterns": ["wheel", "wheel spin"],
+  "announce_wheel_spins": true
+}
+```
+
+**Effect**:
+- Updates `config.announce_to_chat`
+- Updates `config.chat_announce_patterns` (array of strings)
+- Updates `config.announce_wheel_spins`
+- Extension checks these settings before announcing to chat
+
+**Example**:
+```bash
+curl -X POST http://localhost:7777/chat-announce-settings \
+  -H "Content-Type: application/json" \
+  -d '{"announce_to_chat": true, "chat_announce_patterns": ["wheel"], "announce_wheel_spins": true}'
+```
+
+---
+
+### 🎡 Wheel Server Integration
+
+#### `POST /wheel-win`
+**Purpose**: Receive wheel spin results from wheel server for chat announcements
+
+**Request Body**:
+```json
+{
+  "title": "Silver Canadian Dime",
+  "buyer": "CoolUser123",
+  "price": "$15.50"
+}
+```
+
+**Field Requirements**:
+- `title`: Required - The wheel item title
+- `buyer`: Required - The buyer/winner username
+- `price`: Optional - The price (can be empty string)
+
+**Response**:
+```json
+{
+  "status": "wheel win received",
+  "announcement": {
+    "title": "Silver Canadian Dime",
+    "buyer": "CoolUser123",
+    "price": "$15.50",
+    "timestamp": 1699920000000
+  }
+}
+```
+
+**Effect**:
+- Stores announcement in in-memory queue
+- Extension polls every 2 seconds via `/status` endpoint
+- Extension announces to chat when found
+- Queue limited to last 100 announcements (prevents memory leak)
+
+**Example**:
+```bash
+curl -X POST http://localhost:7777/wheel-win \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Silver Canadian Dime", "buyer": "CoolUser123", "price": "$15.50"}'
+```
+
+---
+
+#### `GET /pending-wheel-announcements`
+**Purpose**: Get pending wheel announcements (used by extension polling)
+
+**Request**: No parameters
+
+**Response**:
+```json
+{
+  "announcements": [
+    {
+      "title": "Silver Canadian Dime",
+      "buyer": "CoolUser123",
+      "price": "$15.50",
+      "timestamp": 1699920000000
+    }
+  ]
+}
+```
+
+**Note**: This endpoint is primarily used internally. The extension gets announcements via `/status` endpoint which includes `pending_wheel_announcements` field.
+
+---
+
+#### `POST /clear-wheel-announcements`
+**Purpose**: Clear processed wheel announcements from queue
+
+**Request Body**:
+```json
+{
+  "count": 1
+}
+```
+
+**Response**:
+```json
+{
+  "status": "announcements cleared",
+  "remaining": 0
+}
+```
+
+**Effect**:
+- Removes oldest N announcements from queue (where N = count)
+- If count not provided, clears all announcements
+- Called by extension after processing announcements
+
+**Example**:
+```bash
+curl -X POST http://localhost:7777/clear-wheel-announcements \
+  -H "Content-Type: application/json" \
+  -d '{"count": 1}'
+```
+
+---
+
 ### 📄 Label Management
 
 #### `GET /recent-wins`
@@ -613,6 +784,50 @@ curl http://localhost:7777/print-last
 
 ---
 
+#### `POST /manual-print`
+**Purpose**: Print label on-demand from extension print buttons (bypasses pause setting)
+
+**Request Body**:
+```json
+{
+  "type": "sale|giveaway",
+  "name": "buyer_username",
+  "item": "Item Description",
+  "price": "$25.00"
+}
+```
+
+**Response**:
+```json
+{
+  "status": "manual_print_sent"
+}
+```
+
+**Error Response**:
+```json
+{
+  "status": "no_active_show",
+  "reason": "No active show - create a new show first"
+}
+```
+
+**Behavior**:
+- Always prints regardless of `printing_enabled` setting
+- Still requires active show
+- Still respects exclusions and giveaway settings
+- Saves label to current show's JSON file
+- Respects print cooldown (1.5 seconds)
+
+**Example**:
+```bash
+curl -X POST http://localhost:7777/manual-print \
+  -H "Content-Type: application/json" \
+  -d '{"type": "sale", "name": "buyer123", "item": "Rare Coin", "price": "$15.00"}'
+```
+
+---
+
 #### `POST /reprint`
 **Purpose**: Reprint a specific label by identifying details
 
@@ -628,21 +843,14 @@ curl http://localhost:7777/print-last
 **Response**:
 ```json
 {
-  "status": "printed"
-}
-```
-
-**Error Response**:
-```json
-{
-  "error": "Label not found"
+  "status": "reprint sent"
 }
 ```
 
 **Matching Logic**:
-- Finds exact match on name, item, and price
-- Searches across all shows
-- Prints first matching label if multiple exist
+- Uses provided name, item, and price to create label
+- Does not search for existing label
+- Always prints (bypasses pause, but requires active show)
 
 **Example**:
 ```bash

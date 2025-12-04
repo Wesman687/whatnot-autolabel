@@ -28,17 +28,33 @@ node server.js
 {
   "printing_enabled": true,
   "port": 7777,
-  "print_giveaways": false,
-  "always_on_top": false,
-  "current_show": "my-auction-event",
+  "print_giveaways": true,
+  "always_on_top": true,
+  "current_show": "wheel-11-16-25",
+  "exclusions": [
+    "Wheel Spin"
+  ],
+  "announce_to_chat": false,
+  "chat_announce_patterns": ["wheel", "wheel spin"],
+  "announce_wheel_spins": true,
   "shows": {
-    "my-auction-event": "",
-    "default": "",
-    "test": ""
-  },
-  "exclusions": {
-    "scammer123": true,
-    "problembuyer": true
+    "default": {
+      "name": "Default Show",
+      "labels_file": "labels.json",
+      "created": "2024-01-01"
+    },
+    "wheel-11-16-25": {
+      "name": "Wheel 11-16-25",
+      "labels_file": "labels-wheel-11-16-25.json",
+      "created": "2025-11-16T20:37:36.861Z"
+    },
+    "test": {
+      "name": "Test",
+      "labels_file": "labels-test.json",
+      "created": "2025-11-13T14:41:24.329Z",
+      "ended": "2025-11-13T16:52:42.498Z",
+      "status": "ended"
+    }
   }
 }
 ```
@@ -48,9 +64,17 @@ node server.js
 - `port`: Server port (usually 7777)
 - `print_giveaways`: Whether to print giveaway wins
 - `always_on_top`: GUI window behavior
-- `current_show`: Active show name (only this show prints labels)
-- `shows`: Dictionary of all shows (name -> description)
-- `exclusions`: Blocked usernames (name -> true)
+- `current_show`: Active show ID (only this show prints labels)
+- `shows`: Dictionary of all shows (showId -> show object)
+  - `name`: Display name of the show
+  - `labels_file`: JSON filename in `/server/labels/` directory
+  - `created`: ISO timestamp when show was created
+  - `ended`: Optional ISO timestamp when show ended
+  - `status`: Optional status ("ended" when show is closed)
+- `exclusions`: Array of item text patterns to exclude (case-insensitive substring match)
+- `announce_to_chat`: Boolean - Enable/disable chat announcements globally
+- `chat_announce_patterns`: Array of title patterns to match for chat announcements (case-insensitive)
+- `announce_wheel_spins`: Boolean - Enable/disable sending wheel buys to wheel server (defaults to true)
 
 ## 🌐 API Endpoints
 
@@ -103,12 +127,14 @@ node server.js
 ```
 
 **Processing Logic**:
-1. **Duplicate Detection**: Check against ALL existing labels
+1. **Duplicate Detection**: Check against ALL existing labels in current show
+   - Sales: Exact match on `name + item + price`
+   - Giveaways: Exact match on `name + item` (no price comparison)
 2. **Show Validation**: Ensure active show exists
-3. **Exclusion Check**: Block excluded usernames
+3. **Exclusion Check**: Block items containing excluded text patterns (case-insensitive)
 4. **Giveaway Filter**: Respect giveaway printing setting
-5. **Label Storage**: Save to show-specific JSON file
-6. **Print Trigger**: Call Python printing script
+5. **Label Storage**: Save to show-specific JSON file in `/server/labels/`
+6. **Print Trigger**: Call Python printing script (with 1.5-second cooldown)
 
 #### POST `/heartbeat` - Extension Keep-Alive
 **Purpose**: Receives heartbeat from Chrome extension to track activity
@@ -131,7 +157,11 @@ node server.js
   "shows": {"my-show": "", "test": ""},
   "has_active_show": true,
   "extension_active": true,
-  "last_extension_heartbeat": 1234567890
+  "last_extension_heartbeat": 1234567890,
+  "announce_to_chat": false,
+  "chat_announce_patterns": ["wheel", "wheel spin"],
+  "announce_wheel_spins": true,
+  "pending_wheel_announcements": []
 }
 ```
 
@@ -170,25 +200,256 @@ node server.js
 ### Show Management
 
 #### POST `/create-show` - Create New Show
-**Request**: `{"name": "my-new-show", "description": "Optional description"}`
-**Response**: `{"success": true}`
+**Request**: 
+```json
+{
+  "name": "My New Show"
+}
+```
 
-#### POST `/set-active-show` - Set Active Show
-**Request**: `{"show": "my-show"}`  
-**Response**: `{"success": true, "current_show": "my-show"}`
+**Response**: 
+```json
+{
+  "status": "show created",
+  "showId": "my-new-show",
+  "show": {
+    "name": "My New Show",
+    "labels_file": "labels-my-new-show.json",
+    "created": "2025-11-16T20:37:36.861Z"
+  }
+}
+```
+
+**Behavior**:
+- Creates show ID from name (lowercase, special chars replaced with hyphens)
+- Creates empty labels file in `/server/labels/` directory
+- Does NOT automatically set as active (must call `/switch-show`)
+
+#### POST `/switch-show` - Switch Active Show
+**Request**: 
+```json
+{
+  "showId": "my-show-id"
+}
+```
+
+**Response**: 
+```json
+{
+  "status": "show switched",
+  "current_show": "my-show-id"
+}
+```
+
+**Error Response**:
+```json
+{
+  "error": "Show not found"
+}
+```
+
+#### POST `/end-show` - End Current Show
+**Request**: No body required
+
+**Response**: 
+```json
+{
+  "status": "show ended",
+  "showId": "ended-show-id"
+}
+```
+
+**Behavior**:
+- Marks show with `ended` timestamp and `status: "ended"`
+- Sets `current_show` to `null`
+- Preserves all label data (can still reprint)
+- Cannot end default show
+
+#### POST `/delete-show` - Delete Show
+**Request**: 
+```json
+{
+  "showId": "show-to-delete"
+}
+```
+
+**Response**: 
+```json
+{
+  "status": "show deleted",
+  "showId": "deleted-show-id"
+}
+```
+
+**Behavior**:
+- Permanently deletes show from config
+- Deletes labels file from `/server/labels/` directory
+- Cannot delete default show
+- If deleted show was active, sets `current_show` to `null`
 
 #### GET `/shows` - List All Shows
-**Response**: `{"shows": {"show1": "desc", "show2": ""}}`
+**Response**: 
+```json
+{
+  "shows": {
+    "show1": {
+      "name": "Show 1",
+      "labels_file": "labels-show1.json",
+      "created": "2025-11-16T20:37:36.861Z"
+    }
+  }
+}
+```
 
 ### Exclusion Management
 
-#### POST `/add-exclusion` - Block User
-**Request**: `{"name": "username"}`
-**Response**: `{"success": true}`
+#### GET `/exclusions` - Get Current Exclusions
+**Response**: 
+```json
+{
+  "exclusions": ["Wheel Spin", "silver grams"]
+}
+```
 
-#### POST `/remove-exclusion` - Unblock User  
-**Request**: `{"name": "username"}`
-**Response**: `{"success": true}`
+#### POST `/exclusions` - Update Exclusions
+**Request**: 
+```json
+{
+  "exclusions": ["Wheel Spin", "silver grams", "mercury"]
+}
+```
+
+**Response**: 
+```json
+{
+  "status": "exclusions saved",
+  "exclusions": ["Wheel Spin", "silver grams", "mercury"]
+}
+```
+
+**Behavior**:
+- Replaces entire exclusion list (not additive)
+- Exclusions are item text patterns (not usernames)
+- Case-insensitive substring matching
+- Comma-separated in GUI, array in API
+
+### Chat Announcement Management
+
+#### GET `/chat-announce-settings`
+**Purpose**: Get current chat announcement configuration
+
+**Response**:
+```json
+{
+  "announce_to_chat": false,
+  "chat_announce_patterns": ["wheel", "wheel spin"],
+  "announce_wheel_spins": true
+}
+```
+
+#### POST `/chat-announce-settings`
+**Purpose**: Update chat announcement configuration
+
+**Request**:
+```json
+{
+  "announce_to_chat": true,
+  "chat_announce_patterns": ["wheel", "wheel spin", "giveaway"],
+  "announce_wheel_spins": true
+}
+```
+
+**Response**:
+```json
+{
+  "status": "chat settings saved",
+  "announce_to_chat": true,
+  "chat_announce_patterns": ["wheel", "wheel spin", "giveaway"],
+  "announce_wheel_spins": true
+}
+```
+
+**Behavior**:
+- Updates `config.announce_to_chat` (master enable/disable)
+- Updates `config.chat_announce_patterns` (array of title patterns)
+- Updates `config.announce_wheel_spins` (enable/disable wheel server sends)
+- Extension checks these settings before announcing to chat
+
+### Wheel Server Integration
+
+#### POST `/wheel-win`
+**Purpose**: Receive wheel spin results from wheel server for chat announcements
+
+**Request**:
+```json
+{
+  "title": "Silver Canadian Dime",
+  "buyer": "CoolUser123",
+  "price": "$15.50"
+}
+```
+
+**Response**:
+```json
+{
+  "status": "wheel win received",
+  "announcement": {
+    "title": "Silver Canadian Dime",
+    "buyer": "CoolUser123",
+    "price": "$15.50",
+    "timestamp": 1699920000000
+  }
+}
+```
+
+**Behavior**:
+- Stores announcement in in-memory queue (`pendingWheelAnnouncements`)
+- Extension polls every 2 seconds via `/status` endpoint
+- Extension announces to chat when found
+- Queue limited to last 100 announcements (prevents memory leak)
+- Called by wheel server after processing a spin
+
+#### GET `/pending-wheel-announcements`
+**Purpose**: Get pending wheel announcements (primarily for debugging)
+
+**Response**:
+```json
+{
+  "announcements": [
+    {
+      "title": "Silver Canadian Dime",
+      "buyer": "CoolUser123",
+      "price": "$15.50",
+      "timestamp": 1699920000000
+    }
+  ]
+}
+```
+
+**Note**: Extension gets announcements via `/status` endpoint which includes `pending_wheel_announcements` field.
+
+#### POST `/clear-wheel-announcements`
+**Purpose**: Clear processed wheel announcements from queue
+
+**Request**:
+```json
+{
+  "count": 1
+}
+```
+
+**Response**:
+```json
+{
+  "status": "announcements cleared",
+  "remaining": 0
+}
+```
+
+**Behavior**:
+- Removes oldest N announcements (where N = count)
+- If count not provided, clears all announcements
+- Called by extension after processing announcements
 
 ### Label Management
 
@@ -266,7 +527,7 @@ function saveLabel(labelData) {
 
 ### Algorithm
 ```javascript
-// Check for ANY duplicate (no time limit)
+// Check for ANY duplicate in current show (no time limit)
 const duplicate = existingLabels.find(label => {
     if (type === 'giveaway') {
         // Giveaways: match by exact name AND item 
@@ -286,8 +547,8 @@ const duplicate = existingLabels.find(label => {
 ### Rules
 - **Sales**: Must match `name + item + price` exactly
 - **Giveaways**: Must match `name + item` exactly (no price comparison)
-- **No Time Limit**: Checks against ALL historical labels, not just recent
-- **Cross-Show**: Duplicates checked across all shows
+- **No Time Limit**: Checks against ALL labels in current show, not just recent
+- **Show-Scoped**: Duplicates only checked within current show (not across shows)
 
 ### Examples
 ```javascript
@@ -309,43 +570,52 @@ const duplicate = existingLabels.find(label => {
 ### File Organization
 ```
 server/labels/
-├── my-show-2024.json      # Show-specific labels
-├── pokemon-auction.json   # Another show
-└── default.json          # Default show labels
+├── labels.json                          # Default show labels
+├── labels-wheel-11-16-25.json          # Show-specific labels
+├── labels-11-14-2025-silver-auction.json
+└── labels-test.json
 ```
 
 ### Label Data Structure
 ```json
 {
+  "timestamp": 1699920000000,
+  "type": "sale",
   "name": "winner_username",
   "item": "Auction Item Description",
-  "price": "$25.00",
-  "type": "sale",
-  "timestamp": 1699920000000,
-  "show": "my-show-2024"
+  "price": "$25.00"
 }
 ```
 
+**Note**: Label objects do NOT include `show` field - show is determined by which file they're stored in.
+
 ### Show Management
-- **Active Show**: Only one show can be active at a time
-- **Label Isolation**: Each show has separate JSON file
-- **Historical Access**: All shows remain accessible
-- **Cross-Show Search**: Can search across multiple shows
+- **Active Show**: Only one show can be active at a time (stored in `config.current_show`)
+- **Label Isolation**: Each show has separate JSON file (filename stored in show object)
+- **Historical Access**: All shows remain accessible (even ended shows)
+- **Show-Scoped Search**: Search only searches current show's labels
+- **Show Lifecycle**: Shows can be created → active → ended → deleted
 
 ## 🖨️ Print Integration
 
 ### Flow
 1. **Event Received** → Validation → **Label Saved** → **Print Triggered**
 2. **Print Call**: `printer.printLabel(labelData)`
-3. **Template Formatting**: `formatLabel()` creates printable text
-4. **Python Execution**: Calls `print-label.py` with formatted data
+3. **Python Execution**: Calls `print-label.py` with command-line arguments
+   - Uses virtual environment Python: `.venv/Scripts/python.exe`
+   - Arguments: `buyer item [price]`
 
 ### Print Conditions
-- ✅ Printing enabled (`printing_enabled: true`)
+- ✅ Printing enabled (`printing_enabled: true`) OR manual print request
 - ✅ Active show exists
-- ✅ User not excluded
+- ✅ Item not excluded (pattern matching)
 - ✅ Not a duplicate
 - ✅ Giveaway printing enabled (if giveaway win)
+
+### Print Cooldown
+- **1.5-second cooldown** between prints to prevent rapid duplicate prints
+- Implemented in `printer.js` using `lastPrintTime` tracking
+- Manual prints also respect cooldown
 
 ## 🔄 Extension Communication
 

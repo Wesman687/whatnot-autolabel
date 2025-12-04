@@ -42,29 +42,45 @@ import json
 
 ### Fixed Positioning System
 ```python
-# Absolute coordinates for consistent layout
-LEFT_OFFSET = 20        # Left margin
-TOP_OFFSET = 30         # Top margin  
-NAME_Y = 50            # Winner name position
-ITEM_Y = 90            # Item description position
-PRICE_Y = 130          # Price position (fixed at x=220)
-BRANDING_Y = 170       # "whatnot" branding position
+# Label dimensions (30x20 mm @ 300 DPI)
+LABEL_WIDTH = 354
+LABEL_HEIGHT = 236
+
+# Position tuning
+LEFT_OFFSET = -63
+TOP_OFFSET = -42
+BUYER_RIGHT_ADJUST = 65
+BOTTOM_DOWN_ADJUST = -5  # Moved UP so bottom text isn't cut off
+LINE_SPACING = 5
 ```
+
+### Layout Structure
+- **Buyer Name**: Left-aligned, truncated to 11 characters max, font size 26
+- **Item Description**: Left-aligned, wrapped to 2 lines max, font size 28
+- **Price**: Fixed X position (220 + LEFT_OFFSET), same line as buyer, font size 26
+- **Bottom Text**: Center-aligned, two lines:
+  - "Miracle-Coins.com" (font size 24)
+  - "FB: @miraclecoinz" (font size 24)
 
 ### Visual Layout
 ```
 ┌─────────────────────────────────┐
-│  TOP_OFFSET (30px)              │
-│     ┌─ NAME (11 chars max)      │ ← NAME_Y (50px)
-│     │                           │
-│     ├─ ITEM (truncated)         │ ← ITEM_Y (90px)  
-│     │                           │
-│     │                 PRICE ──┐ │ ← PRICE_Y (130px), x=220
-│     │                           │
-│     └─ whatnot branding        │ ← BRANDING_Y (170px)
+│                                 │
+│  BUYER NAME (11 chars)    PRICE│ ← Same line, price at fixed X
+│  ITEM LINE 1                    │ ← Wrapped to 2 lines max
+│  ITEM LINE 2                    │
+│                                 │
+│        Miracle-Coins.com        │ ← Center-aligned
+│        FB: @miraclecoinz        │ ← Center-aligned
 │                                 │
 └─────────────────────────────────┘
 ```
+
+**Text Positioning**:
+- All text is vertically centered on the label
+- Buyer and item are left-aligned with `LEFT_OFFSET + BUYER_RIGHT_ADJUST`
+- Price is at fixed X coordinate: `220 + LEFT_OFFSET`
+- Bottom text is center-aligned with `BOTTOM_DOWN_ADJUST` to prevent cutoff
 
 ## 🔧 Core Functions
 
@@ -229,45 +245,34 @@ def image_to_bitmap(pil_image):
 ## 📥 Command Line Interface
 
 ### Input Format
-The script expects JSON data as the first command line argument:
+The script expects command-line arguments (not JSON):
 
 ```bash
-python print-label.py '{"name": "winner123", "item": "Rare Coin Set", "price": "$25.00"}'
+python print-label.py <buyer> <item> [price]
+```
+
+**Arguments**:
+- `buyer`: Buyer/winner username (required)
+- `item`: Item description (required)
+- `price`: Price string, e.g., "$25.00" (optional)
+
+**Examples**:
+```bash
+python print-label.py "buyer123" "Rare Coin Set" "$25.00"
+python print-label.py "winner456" "Giveaway Prize"
 ```
 
 ### Argument Parsing
 ```python
-def main():
-    if len(sys.argv) < 2:
-        print("❌ Error: No label data provided")
-        print("Usage: python print-label.py '{\"name\":\"user\",\"item\":\"item\",\"price\":\"$10\"}'")
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print("Usage: python print-label.py <buyer> <item> [price]")
         sys.exit(1)
-    
-    try:
-        # Parse JSON from command line
-        label_data = json.loads(sys.argv[1])
-        
-        # Extract required fields
-        name = label_data.get('name', 'Unknown')
-        item = label_data.get('item', 'Unknown Item')
-        price = label_data.get('price', '')
-        
-        print(f"🖨️ Printing label for: {name}")
-        print(f"📦 Item: {item}")
-        print(f"💰 Price: {price or 'No price'}")
-        
-        # Create and print label
-        image = create_label_image(name, item, price)
-        success = print_to_m221(image)
-        
-        sys.exit(0 if success else 1)
-        
-    except json.JSONDecodeError as e:
-        print(f"❌ Invalid JSON data: {e}")
-        sys.exit(1)
-    except Exception as e:
-        print(f"❌ Unexpected error: {e}")
-        sys.exit(1)
+
+    buyer = sys.argv[1]
+    item = sys.argv[2]
+    price = sys.argv[3] if len(sys.argv) > 3 else None
+    print_label(buyer, item, price)
 ```
 
 ## 🔗 Server Integration
@@ -276,28 +281,53 @@ def main():
 ```javascript
 // server/printer.js calls Python script
 const { exec } = require('child_process');
+const path = require('path');
 
 function printLabel(data) {
-    const jsonData = JSON.stringify(data);
-    const command = `python print-label.py '${jsonData}'`;
+    const now = Date.now();
     
-    exec(command, (error, stdout, stderr) => {
-        if (error) {
-            console.error(`Print error: ${error.message}`);
-            return;
+    // Print cooldown (1.5 seconds)
+    if (now - lastPrintTime < PRINT_COOLDOWN) {
+        console.log("⏳ Cooldown active — skipped duplicate print");
+        return;
+    }
+    lastPrintTime = now;
+    
+    const buyer = data.name || "Unknown";
+    const item = data.item || "Whatnot Item";
+    const price = data.price || null;
+    
+    // Get paths
+    const pythonScript = path.join(__dirname, "..", "print-label.py");
+    const pythonExe = path.join(__dirname, "..", ".venv", "Scripts", "python.exe");
+    
+    // Build command with arguments
+    let command = `"${pythonExe}" "${pythonScript}" "${buyer}" "${item}"`;
+    if (price) {
+        command += ` "${price}"`;
+    }
+    
+    exec(command, (err, stdout, stderr) => {
+        if (err) {
+            console.log("❌ PRINT FAILED:", err.message);
+        } else {
+            console.log("✅ PRINTED");
         }
-        console.log(stdout);
     });
 }
 ```
 
+**Note**: Uses virtual environment Python executable (`.venv/Scripts/python.exe`) for Windows compatibility.
+
 ### Data Flow
 1. **Server**: Receives win event from Chrome extension
 2. **Validation**: Checks duplicates, exclusions, active show
-3. **Format**: Creates label data object with name, item, price
-4. **Python Call**: Executes `print-label.py` with JSON data
-5. **Printing**: Python creates image and sends to printer
-6. **Response**: Success/failure logged back to server
+3. **Label Object**: Creates label data with `{ name, item, price, type, timestamp }`
+4. **Python Call**: Executes `print-label.py` with command-line arguments
+   - Uses virtual environment Python: `.venv/Scripts/python.exe`
+   - Arguments: `buyer item [price]`
+5. **Printing**: Python creates PIL image and sends to Brother M221 printer
+6. **Response**: Success/failure logged to server console
 
 ## 🎛️ Printer Configuration
 

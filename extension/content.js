@@ -1,9 +1,34 @@
 // Note: Duplicate detection now handled by server - extension just sends all events
 let giveawayCounter = 1;
 
+// Clean price string - remove "Sold for", "Payment Pending", etc. and ensure proper format
+function cleanPrice(price) {
+    if (!price) return null;
+    
+    let cleaned = String(price).trim();
+    
+    // Remove common prefixes
+    cleaned = cleaned.replace(/^(Sold\s+for|Payment\s+Pending|Price|Cost):?\s*/i, '');
+    
+    // Extract just the dollar amount
+    const priceMatch = cleaned.match(/\$?(\d+(?:\.\d{2})?)/);
+    if (priceMatch) {
+        const amount = priceMatch[1];
+        // Ensure it has $ prefix
+        return '$' + amount;
+    }
+    
+    // If it already starts with $, return as is (if valid format)
+    if (/^\$\d+(\.\d{2})?$/.test(cleaned)) {
+        return cleaned;
+    }
+    
+    return null;
+}
+
 // CLIENT-SIDE THROTTLING - Prevent spam to server
-const recentWins = new Map(); // Key: "name|item|price", Value: timestamp
-const THROTTLE_WINDOW = 5000; // 5 seconds
+// Permanent duplicate detection - once a win is detected, it never triggers again (for this page session)
+const recentWins = new Set(); // Key: "name|item" (permanent for session - no expiration)
 
 function isRecentlyThrottled(name, item, price) {
     try {
@@ -12,28 +37,26 @@ function isRecentlyThrottled(name, item, price) {
             return false; // Don't throttle invalid data
         }
         
-        const key = `${name}|${item}|${price || 'no-price'}`;
-        const now = Date.now();
-        const lastSent = recentWins.get(key);
+        // Use name and item only (ignore price variations) to catch duplicates
+        const key = `${name}|${item}`;
         
-        if (lastSent && (now - lastSent) < THROTTLE_WINDOW) {
-            return true; // Silent throttling
+        // Check if we've already processed this exact win
+        if (recentWins.has(key)) {
+            console.log(`⏸️ [THROTTLE] Blocking duplicate win (already processed): ${name} - ${item}`);
+            return true; // Block duplicate - never show again
         }
         
-        recentWins.set(key, now);
+        // Mark as processed (permanent for this session)
+        recentWins.add(key);
+        console.log(`✅ [THROTTLE] Allowing new win: ${name} - ${item} (added to permanent throttle set)`);
         
-        // Clean old entries every 50 events
-        if (recentWins.size > 50) {
-            try {
-                for (const [entryKey, timestamp] of recentWins.entries()) {
-                    if (now - timestamp > THROTTLE_WINDOW * 2) {
-                        recentWins.delete(entryKey);
-                    }
-                }
-            } catch (cleanupError) {
-                // If cleanup fails, clear the entire map to prevent memory issues
-                recentWins.clear();
-            }
+        // Clean up if set gets too large (keep last 500 to prevent memory issues)
+        if (recentWins.size > 500) {
+            // Convert to array, keep last 500, clear and re-add
+            const entriesArray = Array.from(recentWins);
+            recentWins.clear();
+            entriesArray.slice(-500).forEach(entry => recentWins.add(entry));
+            console.log(`🧹 [THROTTLE] Cleaned up throttle set, kept last 500 entries`);
         }
         
         return false;
@@ -102,13 +125,10 @@ function maintainBackgroundConnection() {
 maintainBackgroundConnection();
 
 function findPrice() {
-    console.log("🔍 PRICE DETECTION DEBUG - Starting comprehensive search...");
-    
     // Strategy 0: Try specialized Whatnot price detection first
     const whatnotPrice = findWhatnotPrice();
     if (whatnotPrice) {
-        console.log("✅ FOUND PRICE VIA SPECIALIZED WHATNOT DETECTION:", whatnotPrice);
-        return whatnotPrice;
+        return cleanPrice(whatnotPrice);
     }
     
     // Strategy 1: Look in modals/popups first (most accurate for win announcements)
@@ -120,31 +140,25 @@ function findPrice() {
         '[class*="notification"]'
     ];
     
-    console.log("🔍 Checking modals/popups...");
     for (const modalSelector of modalSelectors) {
         const modals = document.querySelectorAll(modalSelector);
-        console.log(`   Found ${modals.length} elements for selector: ${modalSelector}`);
         
         for (const modal of modals) {
             const modalText = modal.innerText || modal.textContent || '';
             if (modalText.toLowerCase().includes('won')) {
-                console.log("   🎯 Found 'won' in modal text:", modalText.substring(0, 200) + "...");
-                
                 // Look for prices that are standalone (not part of descriptions like "2nd Gen")
                 const lines = modalText.split('\n');
                 for (const line of lines) {
                     const trimmedLine = line.trim();
                     // Match exact price format: $XX or $XX.XX as standalone text
                     if (/^\$\d+(\.\d{2})?$/.test(trimmedLine)) {
-                        console.log("   💰 FOUND EXACT PRICE IN WIN MODAL:", trimmedLine);
-                        return trimmedLine;
+                        return cleanPrice(trimmedLine);
                     }
                     // Also check for "Sold" context
                     if (trimmedLine.includes('Sold') || trimmedLine.includes('sold')) {
                         const priceMatch = trimmedLine.match(/\$(\d+(?:\.\d{2})?)/);
                         if (priceMatch) {
-                            console.log("   💰 FOUND PRICE IN SOLD CONTEXT:", priceMatch[0]);
-                            return priceMatch[0];
+                            return cleanPrice(priceMatch[0]);
                         }
                     }
                 }
@@ -153,7 +167,6 @@ function findPrice() {
     }
     
     // Strategy 2: Look for Whatnot-specific price elements
-    console.log("🔍 Checking Whatnot price elements...");
     const whatnotPriceSelectors = [
         // Exact Whatnot price element pattern
         'strong.text-right.text-neutrals-opaque-50.tabular-nums',
@@ -173,40 +186,29 @@ function findPrice() {
     
     for (const selector of whatnotPriceSelectors) {
         const elements = document.querySelectorAll(selector);
-        if (elements.length > 0) {
-            console.log(`   Found ${elements.length} elements for: ${selector}`);
-            
-            for (const element of elements) {
-                const text = (element.innerText || element.textContent || '').trim();
-                if (text && text.includes('$')) {
-                    console.log(`      Element text: "${text}"`);
-                    console.log(`      Element classes: "${element.className}"`);
-                    
-                    // Check for exact price format first (avoids "2nd Gen" type issues)
-                    if (/^\$\d+(\.\d{2})?$/.test(text)) {
-                        console.log(`      💰 FOUND EXACT PRICE FORMAT IN ${selector}: ${text}`);
-                        return text;
-                    }
-                    
-                    // Fallback: check if it's a number-only price in a price context
-                    const priceMatch = text.match(/^\$(\d+(?:\.\d{2})?)$/);
-                    if (priceMatch) {
-                        console.log(`      💰 FOUND WHATNOT PRICE IN ${selector}: ${priceMatch[0]}`);
-                        return priceMatch[0];
-                    }
+        
+        for (const element of elements) {
+            const text = (element.innerText || element.textContent || '').trim();
+            if (text && text.includes('$')) {
+                // Check for exact price format first (avoids "2nd Gen" type issues)
+                if (/^\$\d+(\.\d{2})?$/.test(text)) {
+                    return cleanPrice(text);
+                }
+                
+                // Fallback: check if it's a number-only price in a price context
+                const priceMatch = text.match(/^\$(\d+(?:\.\d{2})?)$/);
+                if (priceMatch) {
+                    return cleanPrice(priceMatch[0]);
                 }
             }
         }
     }
     
     // Strategy 3: Scan visible text on screen for patterns
-    console.log("🔍 Scanning page text for price patterns...");
     const fullPageText = document.body.innerText || '';
     const allPrices = [...fullPageText.matchAll(/\$(\d+(?:\.\d{2})?)/g)];
     
     if (allPrices.length > 0) {
-        console.log("   💰 ALL PRICES FOUND ON PAGE:", allPrices.map(m => m[0]));
-        
         // Look for prices near "won", "winning", "bid", "sold" keywords
         const keywords = ['won', 'winning', 'bid', 'current', 'sold'];
         for (const keyword of keywords) {
@@ -223,16 +225,13 @@ function findPrice() {
                     const trimmedLine = line.trim();
                     // Match standalone price format
                     if (/^\$\d+(\.\d{2})?$/.test(trimmedLine)) {
-                        console.log(`   💰 FOUND EXACT PRICE NEAR '${keyword}': ${trimmedLine}`);
-                        console.log(`      Context: "${context}"`);
-                        return trimmedLine;
+                        return cleanPrice(trimmedLine);
                     }
                     // Or look for "Sold" specific context
                     if (line.toLowerCase().includes('sold') && /\$\d+(\.\d{2})?/.test(line)) {
                         const soldPrice = line.match(/\$(\d+(?:\.\d{2})?)/);
                         if (soldPrice) {
-                            console.log(`   💰 FOUND SOLD PRICE: ${soldPrice[0]}`);
-                            return soldPrice[0];
+                            return cleanPrice(soldPrice[0]);
                         }
                     }
                 }
@@ -258,7 +257,6 @@ function findPrice() {
                 if (context.includes('gen') || context.includes('inch') || 
                     context.includes('gb') || context.includes('pro') ||
                     context.includes('generation')) {
-                    console.log(`   ❌ Rejecting price ${priceStr} - item description context: "${context}"`);
                     return false;
                 }
                 
@@ -271,97 +269,17 @@ function findPrice() {
         
         if (validPrices.length > 0) {
             const highestPrice = validPrices.sort((a, b) => b.value - a.value)[0];
-            console.log("   💰 FALLBACK - HIGHEST VALID PRICE:", highestPrice.price);
-            return highestPrice.price;
+            return cleanPrice(highestPrice.price);
         }
     }
     
-    console.log("❌ NO PRICES FOUND ANYWHERE ON PAGE");
-    
-    // Strategy 4: Debug - show what elements exist on the page
-    console.log("🔍 DEBUG - Available elements with text containing '$':");
-    const allElements = document.querySelectorAll('*');
-    let foundAny = false;
-    for (const el of allElements) {
-        const text = el.innerText || el.textContent || '';
-        if (text.includes('$') && text.length < 100) {
-            console.log(`   Element: ${el.tagName}.${el.className} = "${text}"`);
-            foundAny = true;
-        }
-    }
-    if (!foundAny) {
-        console.log("   No elements with '$' found!");
-    }
-    
-    return null;    // Strategy 3: Look for price elements on the page
-    for (const selector of whatnotSelectors) {
-        const elements = document.querySelectorAll(selector);
-        for (const element of elements) {
-            const text = element.innerText || element.textContent || '';
-            const priceMatch = text.match(/\$(\d+(?:\.\d{2})?)/);
-            if (priceMatch) {
-                console.log("💰 Found price in element:", priceMatch[0], "selector:", selector);
-                return priceMatch[0];
-            }
-        }
-    }
-    
-    // Strategy 3: Look for prices near "won" text but exclude item title prices
-    const pageText = document.body.innerText || '';
-    const wonIndex = pageText.toLowerCase().indexOf('won');
-    if (wonIndex !== -1) {
-        // Look for prices within 300 characters before and after "won"
-        const contextStart = Math.max(0, wonIndex - 300);
-        const contextEnd = Math.min(pageText.length, wonIndex + 300);
-        const contextText = pageText.substring(contextStart, contextEnd);
-        
-        // Find all prices in this context
-        const contextPrices = [...contextText.matchAll(/\$(\d+(?:\.\d{2})?)/g)];
-        for (const match of contextPrices) {
-            const price = match[0];
-            // Skip if this price appears in the item title
-            if (!currentItemTitle.includes(price)) {
-                console.log("💰 Found contextual price near 'won':", price);
-                return price;
-            } else {
-                console.log("⚠️ Skipping item title price near 'won':", price);
-            }
-        }
-    }
-    
-    // Strategy 4: Last resort - look for higher value prices (likely bids, not start prices)
-    const allPriceMatches = [...pageText.matchAll(/\$(\d+(?:\.\d{2})?)/g)];
-    const validPrices = [];
-    
-    for (const match of allPriceMatches) {
-        const price = match[0];
-        const priceValue = parseFloat(price.replace('$', ''));
-        
-        // Skip prices from item title and very low "start" prices
-        if (!currentItemTitle.includes(price) && priceValue >= 2) {
-            validPrices.push({ price, value: priceValue });
-        }
-    }
-    
-    if (validPrices.length > 0) {
-        // Return the highest valid price (most likely the winning bid)
-        const highestPrice = validPrices.sort((a, b) => b.value - a.value)[0];
-        console.log("💰 Found highest valid price:", highestPrice.price, `(excluded ${allPriceMatches.length - validPrices.length} item title/low prices)`);
-        return highestPrice.price;
-    }
-    
-    console.log("❌ No valid bid price found (only item title/start prices detected)");
     return null;
 }
 
 function findWhatnotPrice() {
-    // Specialized function for the exact Whatnot price element you provided
-    console.log("🎯 TARGETED WHATNOT PRICE SEARCH");
-    
-    // Your exact element pattern
+    // Specialized function for the exact Whatnot price element
     const exactSelector = 'strong.text-right.text-neutrals-opaque-50.block.font-sans.text-body1.leading-body1.font-semibold.text-pretty.tabular-nums';
     let elements = document.querySelectorAll(exactSelector);
-    console.log(`   Exact match selector found ${elements.length} elements`);
     
     if (elements.length === 0) {
         // Try partial matches
@@ -374,7 +292,6 @@ function findWhatnotPrice() {
         
         for (const selector of partialSelectors) {
             elements = document.querySelectorAll(selector);
-            console.log(`   Partial selector "${selector}" found ${elements.length} elements`);
             if (elements.length > 0) break;
         }
     }
@@ -382,10 +299,8 @@ function findWhatnotPrice() {
     // Check all found elements
     for (const element of elements) {
         const text = element.innerText || element.textContent || '';
-        console.log(`   Checking element: "${text}" with classes: "${element.className}"`);
         
         if (text.match(/^\$\d+(\.\d{2})?$/)) { // Exact price format like $12 or $12.50
-            console.log(`   🎯 FOUND WHATNOT PRICE: ${text}`);
             return text;
         }
     }
@@ -393,11 +308,42 @@ function findWhatnotPrice() {
     return null;
 }
 
+// Check if payment is pending for a win
+function isPaymentPending(name, item) {
+    try {
+        const allText = document.body?.innerText || document.body?.textContent || '';
+        
+        // Look for the buyer name and item in context
+        // Check if "Payment Pending" appears near the buyer name
+        const buyerPattern = new RegExp(`(${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})[\\s\\S]{0,200}Payment Pending`, 'i');
+        const match = allText.match(buyerPattern);
+        
+        if (match) {
+            // Found payment pending near this buyer
+            // Double-check it's not "Sold for" (which means paid)
+            const context = match[0];
+            if (context.includes('Sold for') && !context.includes('Payment Pending')) {
+                return false; // It's sold/paid
+            }
+            if (context.includes('Payment Pending')) {
+                console.log(`⏸️ [PAYMENT] Payment pending for ${name} - ${item}, holding off on print/announcement`);
+                return true; // Payment is pending
+            }
+        }
+        
+        return false; // No payment pending found, assume paid
+    } catch (error) {
+        // On error, default to allowing (backward compatibility)
+        console.log(`⚠️ [PAYMENT] Error checking payment status, allowing:`, error.message);
+        return false;
+    }
+}
+
 function sendWin(eventType, name, item, price = null) {
     try {
         // CLIENT-SIDE THROTTLING: Don't spam the server with identical events
         if (isRecentlyThrottled(name, item, price)) {
-            return; // Skip sending - already sent recently
+            return; // Skip sending - already sent recently (silent, no alert)
         }
         
         // Validate inputs to prevent crashes
@@ -406,18 +352,34 @@ function sendWin(eventType, name, item, price = null) {
             return;
         }
         
+        // Check if payment is pending - if so, skip printing and announcements
+        if (isPaymentPending(name, item)) {
+            console.log(`[PAYMENT] Skipping win for ${name} - ${item} (payment pending)`);
+            return; // Don't send win, don't print, don't announce
+        }
+        
+        // Clean the price before sending
+        const cleanedPrice = cleanPrice(price);
+        
+        // Debug logging - track price detection at extension level
+        console.log(`[DEBUG] EXTENSION - AUTO-PRINT: ${name} - ${item} | PRICE: ${cleanedPrice || 'MISSING'} (${typeof price})`);
+        
         // Only log actual wins being sent
-        console.log(`🎉 WIN: ${name} - ${item}${price ? ' - ' + price : ''} (${eventType})`);
+        console.log(`WIN: ${name} - ${item}${cleanedPrice ? ' - ' + cleanedPrice : ''} (${eventType})`);
+        
+        // Check if we should announce to chat (after sending to server, server will tell us)
+        checkAndAnnounceToChat(item, name, price);
 
         // Show visual confirmation that win was detected (with error handling)
         try {
+            
             const winAlert = document.createElement('div');
             winAlert.style.cssText = `
                 position: fixed; top: 50px; right: 10px; z-index: 99999;
                 background: #FF4444; color: white; padding: 15px; border-radius: 5px;
                 font-size: 16px; font-weight: bold; box-shadow: 0 4px 8px rgba(0,0,0,0.3);
             `;
-            winAlert.textContent = `🎉 WIN DETECTED: ${name}`;
+            winAlert.textContent = `WIN DETECTED: ${name}`;
             
             if (document.body) {
                 document.body.appendChild(winAlert);
@@ -441,21 +403,463 @@ function sendWin(eventType, name, item, price = null) {
             if (chrome.runtime && chrome.runtime.sendMessage && chrome.runtime.id) {
                 chrome.runtime.sendMessage({
                     type: "WIN_EVENT",
-                    payload: { type: eventType, name, item, price }
+                    payload: { type: eventType, name, item, price: cleanedPrice }
                 }, (response) => {
                     if (chrome.runtime.lastError) {
-                        sendDirectToServer(eventType, name, item, price);
+                        sendDirectToServer(eventType, name, item, cleanedPrice);
                     }
                 });
             } else {
-                sendDirectToServer(eventType, name, item, price);
+                sendDirectToServer(eventType, name, item, cleanedPrice);
             }
         } catch (error) {
-            sendDirectToServer(eventType, name, item, price);
+            sendDirectToServer(eventType, name, item, cleanedPrice);
         }
         
     } catch (error) {
         console.log("SendWin function failed:", error);
+    }
+}
+
+// Announce wheel win to chat
+function announceWheelWinToChat(title, buyer, price) {
+    try {
+        // Try multiple strategies to find the chat input (prioritize Whatnot-specific selectors)
+        const chatInputSelectors = [
+            'input[data-cy="chat_text_field"]',  // Whatnot's specific data attribute
+            'input.chatInput',                    // Whatnot's chat input class
+            'input[placeholder*="Say something"]', // Whatnot's placeholder
+            'input[placeholder*="chat"]',
+            'input[placeholder*="message"]',
+            'textarea[placeholder*="chat"]',
+            'textarea[placeholder*="message"]',
+            '[data-testid*="chat"] input',
+            '[data-testid*="chat"] textarea',
+            '[class*="chat"] input',
+            '[class*="chat"] textarea'
+        ];
+        
+        let chatInput = null;
+        for (const selector of chatInputSelectors) {
+            const elements = document.querySelectorAll(selector);
+            for (const el of elements) {
+                // Check if element is visible and likely the chat input
+                const rect = el.getBoundingClientRect();
+                const isVisible = rect.width > 0 && rect.height > 0;
+                const hasPlaceholder = el.placeholder && (
+                    el.placeholder.toLowerCase().includes('say') ||
+                    el.placeholder.toLowerCase().includes('chat') ||
+                    el.placeholder.toLowerCase().includes('message')
+                );
+                
+                // Prioritize Whatnot-specific selectors
+                if (isVisible && (selector.includes('data-cy') || selector.includes('chatInput') || hasPlaceholder)) {
+                    chatInput = el;
+                    break;
+                }
+            }
+            if (chatInput) break;
+        }
+        
+        if (!chatInput) {
+            console.log('❌ [CHAT] Could not find chat input field');
+            return false;
+        }
+        
+        console.log('✅ [CHAT] Found chat input:', chatInput);
+        
+        // Validate inputs
+        if (!title) {
+            console.log('❌ [CHAT] Cannot announce - missing title');
+            return false;
+        }
+        
+        // Use fallback if buyer is empty
+        const buyerName = buyer || 'Winner';
+        
+        // Build the announcement message with proper price formatting
+        let priceText = '';
+        if (price) {
+            // Ensure price has dollar sign - add it if missing
+            let formattedPrice = price.trim();
+            if (formattedPrice && !formattedPrice.startsWith('$')) {
+                // Extract numeric value and add dollar sign
+                const numericMatch = formattedPrice.match(/[\d.]+/);
+                if (numericMatch) {
+                    formattedPrice = '$' + numericMatch[0];
+                } else {
+                    formattedPrice = '$' + formattedPrice;
+                }
+            }
+            priceText = ` for ${formattedPrice}`;
+        }
+        const message = `🎡 ${buyerName} won ${title}${priceText}!`;
+        
+        console.log(`💬 [CHAT] Announcing wheel win: "${message}"`);
+        
+        // Focus the input
+        chatInput.focus();
+        chatInput.click();
+        
+        // Clear any existing value first
+        chatInput.value = '';
+        
+        // Set the value using multiple methods for React compatibility
+        chatInput.value = message;
+        
+        // Trigger input events (React listens for these)
+        const inputEvent = new Event('input', { bubbles: true, cancelable: true });
+        const changeEvent = new Event('change', { bubbles: true, cancelable: true });
+        chatInput.dispatchEvent(inputEvent);
+        chatInput.dispatchEvent(changeEvent);
+        
+        // React-specific value setting (for controlled components)
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+            window.HTMLInputElement.prototype,
+            'value'
+        )?.set;
+        if (nativeInputValueSetter) {
+            nativeInputValueSetter.call(chatInput, message);
+            chatInput.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        
+        // Wait a moment for React to update, then send via Enter key
+        setTimeout(() => {
+            // Verify the value was set
+            if (chatInput.value !== message) {
+                console.log('⚠️ [CHAT] Value not set correctly, retrying...');
+                chatInput.value = message;
+                chatInput.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+            
+            // Send via Enter key (Whatnot uses Enter to send)
+            const enterDownEvent = new KeyboardEvent('keydown', {
+                key: 'Enter',
+                code: 'Enter',
+                keyCode: 13,
+                which: 13,
+                bubbles: true,
+                cancelable: true
+            });
+            
+            const enterPressEvent = new KeyboardEvent('keypress', {
+                key: 'Enter',
+                code: 'Enter',
+                keyCode: 13,
+                which: 13,
+                bubbles: true,
+                cancelable: true
+            });
+            
+            const enterUpEvent = new KeyboardEvent('keyup', {
+                key: 'Enter',
+                code: 'Enter',
+                keyCode: 13,
+                which: 13,
+                bubbles: true,
+                cancelable: true
+            });
+            
+            // Dispatch all three events (some apps listen to different ones)
+            chatInput.dispatchEvent(enterDownEvent);
+            chatInput.dispatchEvent(enterPressEvent);
+            chatInput.dispatchEvent(enterUpEvent);
+            
+            console.log('✅ [CHAT] Sent Enter key to submit message');
+        }, 150);
+        
+        return true;
+    } catch (error) {
+        console.log(`❌ [CHAT] Error announcing to chat:`, error.message);
+        return false;
+    }
+}
+
+// Send wheel winner to wheel server (wheel server will then send back to main server)
+function sendToWheelServer(title, buyer, price) {
+    try {
+        // Check if payment is pending - CRITICAL: don't send wheel wins if payment pending
+        if (isPaymentPending(buyer, title)) {
+            console.log(`⏸️ [WHEEL] Payment pending for ${buyer} - ${title}, NOT sending to wheel server`);
+            return; // Don't send to wheel server if payment is pending
+        }
+        
+        // Check if wheel spin announcements are enabled
+        fetch('http://localhost:7777/status')
+        .then(r => r.json())
+        .then(statusData => {
+            const announceWheelSpins = statusData.announce_wheel_spins !== undefined ? statusData.announce_wheel_spins : true;
+            
+            if (!announceWheelSpins) {
+                console.log("🎡 [WHEEL] Wheel spin announcements disabled, skipping");
+                return;
+            }
+            
+            // Validate inputs
+            if (!title || !buyer) {
+                console.log("🐛 [WHEEL] Skipping - missing title or buyer:", { title, buyer });
+                return;
+            }
+            
+            // Ensure price is always a string (use empty string if null/undefined)
+            const priceString = price || "";
+            
+            // Extract numeric amount from price string (e.g., "$15.50" -> "15.50")
+            let amount = "";
+            if (priceString) {
+                const amountMatch = priceString.match(/[\d.]+/);
+                amount = amountMatch ? amountMatch[0] : "";
+            }
+            
+            const payload = {
+                buyer: buyer,
+                amount: amount,
+                message: `Thanks for purchasing ${title}!` // optional message
+            };
+            
+            console.log(`🎡 [WHEEL] Sending to wheel server:`, payload);
+            
+            // Send to wheel server (wheel server will handle announcing via main server)
+            fetch('http://localhost:3800/buy-notification', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            })
+            .then(response => {
+                if (!response || !response.ok) {
+                    throw new Error(`Wheel server error: ${response?.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log(`✅ [WHEEL] Successfully sent to wheel server:`, data);
+            })
+            .catch(error => {
+                console.log(`❌ [WHEEL] Failed to send to wheel server:`, error.message);
+                // Silent error handling - wheel server might not be running
+            });
+        })
+        .catch(error => {
+            // If status check fails, default to enabled (backward compatibility)
+            console.log(`⚠️ [WHEEL] Could not check wheel spin setting, defaulting to enabled`);
+            
+            // Validate inputs
+            if (!title || !buyer) {
+                return;
+            }
+            
+            // Extract numeric amount from price string
+            const priceString = price || "";
+            let amount = "";
+            if (priceString) {
+                const amountMatch = priceString.match(/[\d.]+/);
+                amount = amountMatch ? amountMatch[0] : "";
+            }
+            
+            const payload = {
+                buyer: buyer,
+                amount: amount,
+                message: `Thanks for purchasing ${title}!`
+            };
+            
+            fetch('http://localhost:3800/buy-notification', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            }).catch(() => {}); // Silent error
+        });
+        
+        // Note: Chat announcement will be handled by polling pending announcements
+        
+    } catch (error) {
+        console.log(`❌ [WHEEL] Error in sendToWheelServer:`, error.message);
+        // Silent error handling
+    }
+}
+
+function escapeRegex(text = "") {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function hasWheelCardForBuyer(buyer) {
+    if (!buyer) {
+        return false;
+    }
+
+    try {
+        const normalizedBuyer = buyer.toLowerCase().trim();
+        if (!normalizedBuyer) {
+            return false;
+        }
+
+        const buyerPattern = new RegExp(`buyer\\s*:\\s*${escapeRegex(normalizedBuyer)}`, 'i');
+        const cards = document.querySelectorAll('.flex.flex-row.gap-4, [class*="lot-card"], [class*="sale-card"]');
+
+        for (const card of cards) {
+            const text = (card.innerText || card.textContent || '').toLowerCase();
+            if (!text) {
+                continue;
+            }
+            if (!text.includes('wheel')) {
+                continue;
+            }
+            if (buyerPattern.test(text)) {
+                return true;
+            }
+        }
+    } catch (error) {
+        console.log("⚠️ [WHEEL] Wheel card detection failed:", error.message);
+    }
+
+    return false;
+}
+
+// Track processed wheel announcements to prevent duplicates
+const processedWheelAnnouncements = new Set();
+
+// Check for pending wheel announcements from wheel server (via status endpoint)
+// Polls faster (every 0.5 seconds) for near-instant announcements
+let lastWheelCheckTime = 0;
+function checkPendingWheelAnnouncements() {
+    try {
+        const now = Date.now();
+        // Throttle to every 0.5 seconds
+        if (now - lastWheelCheckTime < 500) {
+            return;
+        }
+        lastWheelCheckTime = now;
+        
+        fetch('http://localhost:7777/status')
+        .then(r => r.json())
+        .then(data => {
+            const announcements = data.pending_wheel_announcements || [];
+            
+            if (announcements.length > 0) {
+                console.log(`🎡 [WHEEL] Found ${announcements.length} pending wheel announcements`);
+                
+                // Filter out already processed announcements and validate
+                const newAnnouncements = announcements.filter(announcement => {
+                    // Skip if missing critical data
+                    if (!announcement.title) {
+                        console.log(`⚠️ [WHEEL] Skipping announcement - missing title`);
+                        return false;
+                    }
+                    
+                    // Create unique key from announcement data (use timestamp if buyer is missing)
+                    const buyerKey = announcement.buyer || `no-buyer-${announcement.timestamp}`;
+                    const key = `${buyerKey}|${announcement.title}|${announcement.price || ''}|${announcement.timestamp}`;
+                    
+                    if (processedWheelAnnouncements.has(key)) {
+                        console.log(`🚫 [WHEEL] Skipping duplicate announcement: ${buyerKey} - ${announcement.title}`);
+                        return false; // Already processed
+                    }
+                    
+                    // Mark as processed
+                    processedWheelAnnouncements.add(key);
+                    return true; // New announcement
+                });
+                
+                if (newAnnouncements.length === 0) {
+                    // All were duplicates or invalid, but we still need to clear them from server
+                    fetch('http://localhost:7777/clear-wheel-announcements', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ count: announcements.length })
+                    }).catch(() => {});
+                    return;
+                }
+                
+                console.log(`🎡 [WHEEL] Processing ${newAnnouncements.length} new announcements (${announcements.length - newAnnouncements.length} duplicates/invalid skipped)`);
+                
+                // Announce each new one to chat
+                newAnnouncements.forEach((announcement, index) => {
+                    setTimeout(() => {
+                        // Use "Winner" as fallback if buyer is empty
+                        const buyer = announcement.buyer || 'Winner';
+                        
+                        // Format price for logging (add $ if missing)
+                        let priceForLog = announcement.price || '';
+                        if (priceForLog && !priceForLog.startsWith('$')) {
+                            const numericMatch = priceForLog.match(/[\d.]+/);
+                            if (numericMatch) {
+                                priceForLog = '$' + numericMatch[0];
+                            }
+                        }
+                        
+                        console.log(`💬 [WHEEL] Announcing to chat: ${buyer} won ${announcement.title}${priceForLog ? ' for ' + priceForLog : ''}`);
+                        announceWheelWinToChat(
+                            announcement.title,
+                            buyer,
+                            announcement.price || ''
+                        );
+                    }, index * 500); // Stagger announcements by 500ms
+                });
+                
+                // Clear ALL announcements from server (including duplicates)
+                fetch('http://localhost:7777/clear-wheel-announcements', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ count: announcements.length })
+                })
+                .then(() => {
+                    console.log(`✅ [WHEEL] Cleared ${announcements.length} announcements from server`);
+                })
+                .catch(error => {
+                    console.log(`❌ [WHEEL] Failed to clear announcements:`, error.message);
+                });
+                
+                // Clean up old processed keys (keep last 100 to prevent memory leak)
+                if (processedWheelAnnouncements.size > 100) {
+                    const keysArray = Array.from(processedWheelAnnouncements);
+                    const keysToRemove = keysArray.slice(0, keysArray.length - 100);
+                    keysToRemove.forEach(key => processedWheelAnnouncements.delete(key));
+                }
+            }
+        })
+        .catch(error => {
+            // Silent error - server might not be running
+        });
+    } catch (error) {
+        // Silent error handling
+    }
+}
+
+// Check if item should be announced to chat and do it
+function checkAndAnnounceToChat(item, buyer, price) {
+    try {
+        // Get chat announcement settings from server
+        fetch('http://localhost:7777/chat-announce-settings')
+        .then(r => r.json())
+        .then(settings => {
+            // Check if chat announcements are enabled
+            if (!settings.announce_to_chat) {
+                return; // Chat announcements disabled
+            }
+            
+            // Check if item title matches any pattern
+            const patterns = settings.chat_announce_patterns || [];
+            if (patterns.length === 0) {
+                return; // No patterns set
+            }
+            
+            const itemLower = item.toLowerCase();
+            const matchesPattern = patterns.some(pattern => {
+                const patternLower = pattern.toLowerCase().trim();
+                return patternLower && itemLower.includes(patternLower);
+            });
+            
+            if (matchesPattern) {
+                console.log(`💬 [CHAT] Item matches chat pattern, announcing: ${item}`);
+                announceWheelWinToChat(item, buyer, price || '');
+            }
+        })
+        .catch(error => {
+            // Silent error - server might not be running
+        });
+    } catch (error) {
+        // Silent error handling
     }
 }
 
@@ -467,11 +871,23 @@ function sendManualPrint(eventType, name, item, price) {
             return;
         }
         
+        // Check if payment is pending - warn user but allow manual print
+        if (isPaymentPending(name, item)) {
+            console.log(`[MANUAL-PRINT] WARNING: Payment pending for ${name} - ${item}`);
+            // Still allow manual print, but log warning
+        }
+        
+        // Clean the price before sending
+        const cleanedPrice = cleanPrice(price);
+        
+        // Debug logging - track price at manual print level
+        console.log(`[DEBUG] EXTENSION - MANUAL-PRINT: ${name} - ${item} | PRICE: ${cleanedPrice || 'MISSING'} (${typeof price})`);
+        
         const payload = {
             type: eventType,
             name: name,
             item: item,
-            price: price
+            price: cleanedPrice
         };
         
         fetch('http://localhost:7777/manual-print', {
@@ -488,7 +904,12 @@ function sendManualPrint(eventType, name, item, price) {
             return response.json();
         })
         .then(data => {
-            // Silent success
+            // Only announce to chat if payment is NOT pending
+            if (!isPaymentPending(name, item)) {
+                checkAndAnnounceToChat(item, name, cleanedPrice);
+            } else {
+                console.log(`[MANUAL-PRINT] Skipping chat announcement (payment pending)`);
+            }
         })
         .catch(error => {
             // Silent error handling
@@ -497,6 +918,7 @@ function sendManualPrint(eventType, name, item, price) {
         // Silent error handling
     }
 }
+
 
 // Fallback: Send directly to server when extension context is invalid
 function sendDirectToServer(eventType, name, item, price) {
@@ -576,49 +998,21 @@ function scan() {
             return; // No content to scan
         }
     
-    // More aggressive logging every 10th scan
-    if (Math.random() < 0.1) { // 10% chance to log scan status
-        console.log("🔍 SCAN STATUS:", {
-            url: window.location.href,
-            hasWonText: allText.toLowerCase().includes('won'),
-            pageLength: allText.length,
-            title: document.title
-        });
-    }
-    
-    // Debug: log if we see any "won" text at all
+    // Look for win patterns
     if (allText.toLowerCase().includes('won')) {
-        console.log("🔍 FOUND 'won' text somewhere on page");
-        const sample = findTextAroundWon(allText);
-        console.log("📝 Sample text around 'won':", sample);
-        
-        // Look for the EXACT pattern we saw in the screenshot
         const patterns = [
             { pattern: /(\w+)\s+won\s+the\s+auction!/gi, name: "EXACT_MATCH" },
-            { pattern: /(\w+)\s+won\s+the\s+giveaway!/gi, name: "giveaway_win" }, // More specific - require exclamation
+            { pattern: /(\w+)\s+won\s+the\s+giveaway!/gi, name: "giveaway_win" },
             { pattern: /(\w+)\s+won!/gi, name: "general_win" },
             { pattern: /(\w+)\s+won\s+this\s+auction/gi, name: "this_auction_win" },
             { pattern: /congratulations\s+(\w+).*won/gi, name: "congrats_win" }
         ];
-        
-        // SPECIAL CHECK: Look specifically for "hanksch42376 won the auction!" type patterns
-        if (allText.includes('won the auction!')) {
-            console.log("🎯 FOUND EXACT PATTERN: 'won the auction!' - This should trigger!");
-            console.log("📝 Full text search result:");
-            const lines = allText.split('\n');
-            lines.forEach((line, i) => {
-                if (line.toLowerCase().includes('won the auction')) {
-                    console.log(`  Line ${i}: "${line.trim()}"`);
-                }
-            });
-        }
         
         let foundAnyPattern = false;
         
         for (const { pattern, name } of patterns) {
             const matches = [...allText.matchAll(pattern)];
             if (matches.length > 0) {
-                console.log(`🎯 PATTERN "${name}" found ${matches.length} matches:`, matches.map(m => m[0]));
                 foundAnyPattern = true;
                 
                 for (const match of matches) {
@@ -627,7 +1021,6 @@ function scan() {
                     
                     // Extra validation for giveaways to prevent false matches
                     if (isGiveaway && name !== "giveaway_win") {
-                        console.log("🚫 Skipping non-specific giveaway pattern");
                         continue;
                     }
                     
@@ -645,57 +1038,23 @@ function scan() {
                         price = findPrice();
                     }
                     
-                    console.log("🚀 TRIGGERING WIN EVENT:", {
-                        pattern: name,
-                        type: isGiveaway ? 'giveaway' : 'sale',
-                        winner,
-                        item: itemTitle,
-                        price: price,
-                        fullMatch: match[0],
-                        detectionMethod: isGiveaway ? 'giveaway-specific' : 'general'
-                    });
+                    console.log(`[WIN] ${winner} - ${itemTitle}${price ? ' - ' + price : ''} (${isGiveaway ? 'giveaway' : 'sale'})`);
                     sendWin(isGiveaway ? 'giveaway' : 'sale', winner, itemTitle, price);
+                    
+                    // Check if this is a wheel item and send to wheel server
+                    const wheelByTitle = itemTitle.toLowerCase().includes('wheel');
+                    const wheelByCard = hasWheelCardForBuyer(winner);
+                    if (wheelByTitle || wheelByCard) {
+                        sendToWheelServer(itemTitle, winner, price);
+                    }
+                    
+                    // Note: Chat announcements are handled in sendWin() via checkAndAnnounceToChat()
                 }
             }
         }
         
-        if (!foundAnyPattern) {
-            console.log("❌ No win patterns matched. Raw 'won' text contexts:");
-            const wonOccurrences = [];
-            let index = allText.toLowerCase().indexOf('won');
-            while (index !== -1 && wonOccurrences.length < 5) {
-                const start = Math.max(0, index - 30);
-                const end = Math.min(allText.length, index + 30);
-                wonOccurrences.push(allText.substring(start, end));
-                index = allText.toLowerCase().indexOf('won', index + 1);
-            }
-            console.log("📝 All 'won' contexts:", wonOccurrences);
-        }
     }
     
-        // Also scan individual elements for more specific detection (with error handling)
-        try {
-            const elements = document.querySelectorAll('div, span, p, [class*="modal"], [class*="popup"], [class*="notification"]');
-            
-            for (const element of elements) {
-                try {
-                    const text = element?.innerText || element?.textContent || '';
-                    
-                    if (text.includes('won') && text.length < 200) { // Avoid scanning huge text blocks
-                        console.log("🔍 Element with 'won':", text.substring(0, 100));
-                        
-                        if (/\w+\s+(won|wins)/.test(text)) {
-                            console.log("📍 Potential win element found:", text);
-                        }
-                    }
-                } catch (elementError) {
-                    // Skip problematic elements, continue with others
-                    continue;
-                }
-            }
-        } catch (querySelectorError) {
-            console.log("Element scanning failed, continuing...");
-        }
     
     } catch (error) {
         console.log("Scan error (non-critical):", error.message);
@@ -824,7 +1183,7 @@ try {
     // Silent error handling
 }
 
-// Reduce periodic scanning to every 10 seconds
+// Periodic scanning every 10 seconds
 try {
     setInterval(() => {
         try {
@@ -834,6 +1193,19 @@ try {
             // Silent error handling
         }
     }, 10000);
+} catch (error) {
+    // Silent error handling
+}
+
+// Faster polling for wheel announcements (every 0.5 seconds)
+try {
+    setInterval(() => {
+        try {
+            checkPendingWheelAnnouncements(); // Check for wheel announcements from wheel server
+        } catch (error) {
+            // Silent error handling
+        }
+    }, 500);
 } catch (error) {
     // Silent error handling
 }
@@ -875,6 +1247,7 @@ function injectPrintButtons() {
         // Strategy 1: Use flex container selector pattern (works for both sales and giveaways)
         const flexCards = document.querySelectorAll('.flex.flex-row.gap-4');
         const itemCards = [];
+        let fallbackUsed = false;
         
         flexCards.forEach(card => {
             // Look for the first meaningful text element that could be a title
@@ -913,6 +1286,7 @@ function injectPrintButtons() {
         // Strategy 2: Fallback to original method if no flex cards found
         if (itemCards.length === 0) {
             const allElements = document.querySelectorAll('*');
+            fallbackUsed = true;
             allElements.forEach(element => {
                 const text = (element.innerText || element.textContent || '').trim();
                 
@@ -949,8 +1323,16 @@ function injectPrintButtons() {
         itemCards.forEach((cardInfo, index) => {
             const { titleElement, cardContainer, itemTitle } = cardInfo;
             
-            // Check if we already added a button to this card
-            if (cardContainer.querySelector('.whatnot-autoprint-btn')) {
+            const isWheelText = (itemTitle || '').toLowerCase().includes('wheel');
+            const fallbackWheelText = (cardContainer.textContent || '').toLowerCase().includes('wheel');
+            const isWheelItem = isWheelText || fallbackWheelText;
+            const hasPrintBtn = !!cardContainer.querySelector('.whatnot-autoprint-btn');
+            const hasWheelBtn = !!cardContainer.querySelector('.whatnot-wheel-btn');
+
+            const willAddPrint = !hasPrintBtn;
+            const willAddWheel = isWheelItem && !hasWheelBtn;
+
+            if (!willAddPrint && !willAddWheel) {
                 return;
             }
             
@@ -982,54 +1364,144 @@ function injectPrintButtons() {
             }
             
             // Extract price - handle sales, giveaways, and $0 items
-            const paymentPendingMatch = allText.match(/Payment Pending:\s*\$(\d+)/);
-            const soldForMatch = allText.match(/Sold for\s*\$(\d+)/);
+            // Match prices with optional cents: $15 or $15.50
+            const paymentPendingMatch = allText.match(/Payment Pending:\s*\$(\d+(?:\.\d{2})?)/);
+            const soldForMatch = allText.match(/Sold for\s*\$(\d+(?:\.\d{2})?)/);
+            
+            // Check payment status - if "Payment Pending" exists and "Sold for" doesn't, it's pending
+            const hasPaymentPending = paymentPendingMatch !== null;
+            const hasSoldFor = soldForMatch !== null;
+            const isPaymentPending = hasPaymentPending && !hasSoldFor;
             
             if (paymentPendingMatch) {
-                salePrice = '$' + paymentPendingMatch[1];
+                // Extract and clean price
+                salePrice = cleanPrice('$' + paymentPendingMatch[1]);
             } else if (soldForMatch) {
-                salePrice = '$' + soldForMatch[1];
+                // Extract and clean price (remove "Sold for" text)
+                salePrice = cleanPrice('$' + soldForMatch[1]);
             } else if (allText.includes('$0')) {
                 salePrice = '$0';
             }
             
-            // Create the print button - small and inline with title
-            const printBtn = document.createElement('span');
-            printBtn.className = 'whatnot-autoprint-btn';
-            printBtn.innerHTML = ' 🖨️';
-            printBtn.title = `Print label for ${buyerName} - ${itemTitle}`;
-            printBtn.style.cssText = `
-                display: inline;
-                margin-left: 8px;
-                color: #4CAF50;
-                font-size: 14px;
-                cursor: pointer;
-                user-select: none;
-                transition: all 0.2s ease;
-            `;
-            
-            // Add hover effect
-            printBtn.addEventListener('mouseenter', () => {
-                printBtn.style.background = '#45a049';
-                printBtn.style.transform = 'scale(1.05)';
-            });
-            printBtn.addEventListener('mouseleave', () => {
-                printBtn.style.background = '#4CAF50';
-                printBtn.style.transform = 'scale(1)';
-            });
-            
-            // Add hover effects
-            printBtn.addEventListener('mouseenter', () => {
-                printBtn.style.color = '#45a049';
-                printBtn.style.transform = 'scale(1.2)';
-            });
-            printBtn.addEventListener('mouseleave', () => {
-                printBtn.style.color = '#4CAF50';
-                printBtn.style.transform = 'scale(1)';
-            });
+            let printBtn = null;
+            if (willAddPrint) {
+                printBtn = document.createElement('span');
+                printBtn.className = 'whatnot-autoprint-btn';
+                printBtn.innerHTML = isPaymentPending ? ' ⏸️' : ' 🖨️';
+                printBtn.title = isPaymentPending 
+                    ? `Payment Pending - Wait for payment before printing ${buyerName} - ${itemTitle}`
+                    : `Print label for ${buyerName} - ${itemTitle}`;
+                printBtn.style.cssText = `
+                    display: inline;
+                    margin-left: 8px;
+                    color: ${isPaymentPending ? '#FF9800' : '#4CAF50'};
+                    font-size: 14px;
+                    cursor: ${isPaymentPending ? 'not-allowed' : 'pointer'};
+                    user-select: none;
+                    transition: all 0.2s ease;
+                    opacity: ${isPaymentPending ? '0.6' : '1'};
+                `;
+                
+                if (!isPaymentPending) {
+                    printBtn.addEventListener('mouseenter', () => {
+                        printBtn.style.color = '#45a049';
+                        printBtn.style.transform = 'scale(1.2)';
+                    });
+                    printBtn.addEventListener('mouseleave', () => {
+                        printBtn.style.color = '#4CAF50';
+                        printBtn.style.transform = 'scale(1)';
+                    });
+                }
+            }
+
+            let wheelBtn = null;
+            if (willAddWheel) {
+                wheelBtn = document.createElement('span');
+                wheelBtn.className = 'whatnot-wheel-btn';
+                wheelBtn.innerHTML = ' 🎡';
+                wheelBtn.title = `Send to wheel server: ${buyerName} - ${itemTitle}`;
+                wheelBtn.style.cssText = `
+                    display: inline;
+                    margin-left: 4px;
+                    color: #2196F3;
+                    font-size: 14px;
+                    cursor: pointer;
+                    user-select: none;
+                    transition: all 0.2s ease;
+                `;
+                
+                // Add hover effects
+                wheelBtn.addEventListener('mouseenter', () => {
+                    wheelBtn.style.color = '#1976D2';
+                    wheelBtn.style.transform = 'scale(1.2)';
+                });
+                wheelBtn.addEventListener('mouseleave', () => {
+                    wheelBtn.style.color = '#2196F3';
+                    wheelBtn.style.transform = 'scale(1)';
+                });
+                
+                // Add click handler for manual wheel send
+                wheelBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    
+                    const originalContent = wheelBtn.innerHTML;
+                    wheelBtn.innerHTML = ' ⏳';
+                    wheelBtn.style.color = '#FF9800';
+                    
+                    console.log(`🎡 [MANUAL-WHEEL] Sending to wheel server: ${buyerName} - ${itemTitle} - ${salePrice || 'no price'}`);
+                    
+                    // Extract numeric amount from price
+                    let amount = "";
+                    if (salePrice) {
+                        const amountMatch = salePrice.match(/[\d.]+/);
+                        amount = amountMatch ? amountMatch[0] : "";
+                    }
+                    
+                    const payload = {
+                        buyer: buyerName,
+                        amount: amount,
+                        message: `Thanks for purchasing ${itemTitle}!`
+                    };
+                    
+                    // Send to wheel server (manual override - bypasses payment pending check)
+                    fetch('http://localhost:3800/buy-notification', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(payload)
+                    })
+                    .then(response => {
+                        if (!response || !response.ok) {
+                            throw new Error(`Wheel server error: ${response?.status}`);
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        console.log(`✅ [MANUAL-WHEEL] Successfully sent to wheel server:`, data);
+                        wheelBtn.innerHTML = ' ✅';
+                        wheelBtn.style.color = '#4CAF50';
+                        setTimeout(() => {
+                            wheelBtn.innerHTML = originalContent;
+                            wheelBtn.style.color = '#2196F3';
+                        }, 2000);
+                    })
+                    .catch(error => {
+                        console.log(`❌ [MANUAL-WHEEL] Failed to send to wheel server:`, error.message);
+                        wheelBtn.innerHTML = ' ❌';
+                        wheelBtn.style.color = '#f44336';
+                        setTimeout(() => {
+                            wheelBtn.innerHTML = originalContent;
+                            wheelBtn.style.color = '#2196F3';
+                        }, 2000);
+                    });
+                });
+            }
             
             // Add click handler
-            printBtn.addEventListener('click', (e) => {
+            if (printBtn) {
+                printBtn.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 
@@ -1051,6 +1523,16 @@ function injectPrintButtons() {
                     eventType = 'giveaway';
                 }
                 
+                // Check payment status before allowing print/wheel server
+                if (isPaymentPending) {
+                    // Disable button and show warning
+                    printBtn.style.opacity = '0.5';
+                    printBtn.style.cursor = 'not-allowed';
+                    printBtn.title = 'Payment Pending - Wait for payment before printing';
+                    console.log(`⏸️ [MANUAL-PRINT] Payment pending for ${buyerName} - ${itemTitle}, button disabled`);
+                    return; // Don't allow manual print if payment pending
+                }
+                
                 // Send to manual print endpoint (bypasses pause setting)
                 try {
                     sendManualPrint(eventType, buyerName, itemTitle, salePrice);
@@ -1058,23 +1540,42 @@ function injectPrintButtons() {
                     // Silent error handling
                 }
                 
+                // Check if this is a wheel item and send to wheel server (separate from print)
+                // Only if payment is NOT pending
+                if (itemTitle.toLowerCase().includes('wheel') && !isPaymentPending) {
+                    sendToWheelServer(itemTitle, buyerName, salePrice);
+                }
+                
+                // Note: Chat announcements are handled in sendManualPrint() via checkAndAnnounceToChat()
+                
                 // Reset button after 2 seconds
                 setTimeout(() => {
                     printBtn.innerHTML = originalContent;
                     printBtn.style.color = '#4CAF50';
                 }, 2000);
             });
+        }
             
-            // Add the button directly to the title element (inline with the text)
+            // Add the buttons directly to the title element (inline with the text)
             try {
                 // Append directly to the title element so it appears right after the title text
-                titleElement.appendChild(printBtn);
+                if (printBtn) {
+                    titleElement.appendChild(printBtn);
+                }
+                if (wheelBtn) {
+                    titleElement.appendChild(wheelBtn);
+                }
                 buttonsAdded++;
             } catch (appendError) {
                 // Fallback: try adding to parent
                 try {
                     if (titleElement.parentElement) {
-                        titleElement.parentElement.appendChild(printBtn);
+                        if (printBtn) {
+                            titleElement.parentElement.appendChild(printBtn);
+                        }
+                        if (wheelBtn) {
+                            titleElement.parentElement.appendChild(wheelBtn);
+                        }
                         buttonsAdded++;
                     }
                 } catch (fallbackError) {
@@ -1083,6 +1584,7 @@ function injectPrintButtons() {
             }
         });
         
+        console.log(`[AutoPrint] injectPrintButtons: cards=${itemCards.length} fallback=${fallbackUsed} added=${buttonsAdded}`);
         return buttonsAdded;
         
     } catch (error) {
@@ -1093,7 +1595,8 @@ function injectPrintButtons() {
 console.log("🔥 Whatnot AutoPrint (Updated 2025 DOM) Loaded");
 console.log("🔍 Current page URL:", window.location.href);
 console.log("📊 Page title:", document.title);
-console.log("⏰ Will scan every 5 seconds and send heartbeats every 10 seconds");
+console.log("⏰ Will scan every 10 seconds and send heartbeats every 2 seconds");
+console.log("🎡 Will check for pending wheel announcements every 2 seconds");
 
 // Add manual testing functions to global scope for console testing
 window.testPriceDetection = function() {
@@ -1314,6 +1817,116 @@ window.debugItemData = function() {
     return itemCount;
 };
 
+
+// Test payment pending detection
+window.testPaymentPending = function(buyerName, itemTitle) {
+    console.log("\n🧪 TESTING PAYMENT PENDING DETECTION");
+    console.log("====================================");
+    
+    const testBuyer = buyerName || "TestUser123";
+    const testItem = itemTitle || "Test Wheel Item";
+    
+    // Inject test HTML that mimics payment pending status
+    const testContainer = document.createElement('div');
+    testContainer.id = 'payment-pending-test';
+    testContainer.style.cssText = 'position: fixed; top: 50px; left: 50px; z-index: 99999; background: #1a1a1a; padding: 20px; border: 2px solid #FF9800; border-radius: 8px; color: white; max-width: 400px;';
+    testContainer.innerHTML = `
+        <div style="margin-bottom: 10px;">
+            <strong>🧪 Payment Pending Test</strong>
+        </div>
+        <div style="margin-bottom: 10px;">
+            Buyer: ${testBuyer}<br>
+            Item: ${testItem}<br>
+            Payment Pending: $15.50
+        </div>
+        <div style="margin-top: 10px; font-size: 12px; color: #aaa;">
+            This simulates a payment pending status. Check console for test results.
+        </div>
+        <button onclick="document.getElementById('payment-pending-test').remove()" style="margin-top: 10px; padding: 5px 10px; background: #FF9800; color: white; border: none; border-radius: 4px; cursor: pointer;">Close</button>
+    `;
+    document.body.appendChild(testContainer);
+    
+    // Test the isPaymentPending function
+    console.log(`\n1️⃣ Testing isPaymentPending() function:`);
+    const isPending = isPaymentPending(testBuyer, testItem);
+    console.log(`   Result: ${isPending ? '✅ Payment Pending detected' : '❌ Payment Pending NOT detected'}`);
+    
+    // Test sendWin with payment pending
+    console.log(`\n2️⃣ Testing sendWin() with payment pending:`);
+    console.log(`   This should be blocked if payment is pending...`);
+    sendWin('sale', testBuyer, testItem, '$15.50');
+    
+    // Test sendToWheelServer with payment pending
+    console.log(`\n3️⃣ Testing sendToWheelServer() with payment pending:`);
+    console.log(`   This should be blocked if payment is pending...`);
+    sendToWheelServer(testItem, testBuyer, '$15.50');
+    
+    console.log(`\n✅ Test complete! Check console messages above.`);
+    console.log(`💡 The test HTML will remain on page - close it manually or refresh.`);
+    console.log("====================================\n");
+    
+    return {
+        buyer: testBuyer,
+        item: testItem,
+        paymentPending: isPending,
+        testElement: testContainer
+    };
+};
+
+// Test payment PAID scenario
+window.testPaymentPaid = function(buyerName, itemTitle) {
+    console.log("\n🧪 TESTING PAYMENT PAID SCENARIO");
+    console.log("=================================");
+    
+    const testBuyer = buyerName || "TestUser123";
+    const testItem = itemTitle || "Test Wheel Item";
+    
+    // Inject test HTML that mimics paid status
+    const testContainer = document.createElement('div');
+    testContainer.id = 'payment-paid-test';
+    testContainer.style.cssText = 'position: fixed; top: 50px; left: 50px; z-index: 99999; background: #1a1a1a; padding: 20px; border: 2px solid #4CAF50; border-radius: 8px; color: white; max-width: 400px;';
+    testContainer.innerHTML = `
+        <div style="margin-bottom: 10px;">
+            <strong>✅ Payment Paid Test</strong>
+        </div>
+        <div style="margin-bottom: 10px;">
+            Buyer: ${testBuyer}<br>
+            Item: ${testItem}<br>
+            Sold for: $15.50
+        </div>
+        <div style="margin-top: 10px; font-size: 12px; color: #aaa;">
+            This simulates a paid status. Check console for test results.
+        </div>
+        <button onclick="document.getElementById('payment-paid-test').remove()" style="margin-top: 10px; padding: 5px 10px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;">Close</button>
+    `;
+    document.body.appendChild(testContainer);
+    
+    // Test the isPaymentPending function (should return false)
+    console.log(`\n1️⃣ Testing isPaymentPending() function:`);
+    const isPending = isPaymentPending(testBuyer, testItem);
+    console.log(`   Result: ${isPending ? '❌ Still showing as pending (wrong!)' : '✅ Payment NOT pending (correct - should proceed)'}`);
+    
+    // Test sendWin with payment paid
+    console.log(`\n2️⃣ Testing sendWin() with payment paid:`);
+    console.log(`   This should proceed normally...`);
+    sendWin('sale', testBuyer, testItem, '$15.50');
+    
+    // Test sendToWheelServer with payment paid
+    console.log(`\n3️⃣ Testing sendToWheelServer() with payment paid:`);
+    console.log(`   This should proceed normally...`);
+    sendToWheelServer(testItem, testBuyer, '$15.50');
+    
+    console.log(`\n✅ Test complete! Check console messages above.`);
+    console.log("=================================\n");
+    
+    return {
+        buyer: testBuyer,
+        item: testItem,
+        paymentPending: isPending,
+        testElement: testContainer
+    };
+};
+
 console.log("💡 TIP: Run these functions in console:");
 console.log("   • testPrintButtons() - Force add print buttons (works immediately!)");
 console.log("   • debugItemData() - Show buyer/price data for each item");
@@ -1324,6 +1937,8 @@ console.log("   • simulateWinWithPrice() - Simulate win event with price detec
 console.log("   • debugItemTitles() - Debug what item titles are available on page");
 console.log("   • clearDuplicates() - Clear duplicate detection cache");
 console.log("   • resetGiveawayCounter() - Reset giveaway numbering to 1");
+console.log("   • testPaymentPending('Buyer', 'Item') - Test payment pending detection");
+console.log("   • testPaymentPaid('Buyer', 'Item') - Test payment paid scenario");
 
 // Add visual confirmation that extension loaded
 if (window.location.href.includes('whatnot.com')) {
@@ -1354,3 +1969,4 @@ if (window.location.href.includes('whatnot.com')) {
     
     console.log("🎯 Page type detection:", isLivePage ? "LIVE PAGE" : "NON-LIVE PAGE");
 }
+

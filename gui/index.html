@@ -27,6 +27,12 @@
         <label>
             <input type="checkbox" id="printGiveawaysCheckbox" checked> Print Giveaways
         </label>
+        <label>
+            <input type="checkbox" id="announceToChatCheckbox"> Announce to Chat
+        </label>
+        <label>
+            <input type="checkbox" id="announceWheelSpinsCheckbox" checked> Announce Wheel Spins to Server
+        </label>
     </div>
 
     <div class="controls">
@@ -48,6 +54,16 @@
         <button id="clearExclusionsBtn">Clear All</button>
         <div id="currentExclusions" class="current-exclusions">
             <em>No exclusions set</em>
+        </div>
+    </div>
+
+    <div class="exclusion-container">
+        <label for="chatAnnounceBox">Announce to chat if title contains (comma separated):</label>
+        <input id="chatAnnounceBox" placeholder="e.g. wheel, wheel spin, giveaway" />
+        <button id="saveChatAnnounceBtn">Save Patterns</button>
+        <button id="clearChatAnnounceBtn">Clear All</button>
+        <div id="currentChatAnnounce" class="current-exclusions">
+            <em>No patterns set</em>
         </div>
     </div>
 

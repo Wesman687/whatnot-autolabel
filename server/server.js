@@ -2,10 +2,21 @@ const express = require('express');
 const fs = require('fs');
 const cors = require('cors');
 const path = require('path');
+const { logDebug } = require('./debug-logger');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Request logging middleware
+app.use((req, res, next) => {
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] ${req.method} ${req.path}`);
+    if (req.body && Object.keys(req.body).length > 0) {
+        console.log(`   Body:`, JSON.stringify(req.body).substring(0, 200));
+    }
+    next();
+});
 
 const CONFIG_PATH = path.join(__dirname, 'config.json');
 const LABELS_PATH = path.join(__dirname, 'labels.json');
@@ -71,11 +82,6 @@ function saveLabel(labelObj) {
     
     labels.push(labelObj);
     
-    // Keep only last 100 entries to prevent infinite growth
-    if (labels.length > 100) {
-        labels = labels.slice(-100);
-    }
-    
     try {
         fs.writeFileSync(labelsPath, JSON.stringify(labels, null, 2));
     } catch (e) {
@@ -87,7 +93,16 @@ app.post('/event', (req, res) => {
     const cfg = loadConfig();
     const { type, name, item, price } = req.body;
 
-    console.log(`🎯 ${type.toUpperCase()}: ${name} - ${item}${price ? ' - ' + price : ''}`);
+    // Debug logging for price tracking
+    logDebug('server-event', 'auto-print', { type, name, item, price });
+
+    // Enhanced price logging
+    console.log(`[${type.toUpperCase()}] ${name} - ${item}${price ? ' - ' + price : ' (NO PRICE)'}`);
+    if (price !== undefined && price !== null) {
+        console.log(`[PRICE] Received: "${price}" (type: ${typeof price})`);
+    } else {
+        console.log(`[WARNING] No price received for ${name} - ${item}`);
+    }
     
     // SERVER-SIDE DUPLICATE DETECTION - NO DUPLICATES EVER
     const existingLabels = getLabels();
@@ -108,14 +123,14 @@ app.post('/event', (req, res) => {
     });
     
     if (duplicate) {
-        console.log("🚫 DUPLICATE - ignored");
+        console.log("[DUPLICATE] Ignored");
         res.json({ status: "duplicate", reason: "Exact duplicate already exists" });
         return;
     }
     
     // Check if there's an active show
     if (!cfg.current_show || !cfg.shows[cfg.current_show]) {
-        console.log("🚫 No active show - win logged but not saved or printed");
+        console.log("[WARNING] No active show - win logged but not saved or printed");
         res.json({ status: "no_active_show", reason: "No active show - create a new show to start printing" });
         return;
     }
@@ -127,34 +142,46 @@ app.post('/event', (req, res) => {
         return pattern && item.toLowerCase().includes(pattern);
     });
 
+    // Normalize price: keep it if it's a valid string/number, otherwise null
+    let normalizedPrice = null;
+    if (price !== undefined && price !== null && price !== '' && price !== 'null' && price !== 'undefined') {
+        normalizedPrice = String(price).trim();
+        // Ensure it starts with $ if it's a number
+        if (normalizedPrice && !normalizedPrice.startsWith('$') && /^\d+(\.\d{2})?$/.test(normalizedPrice)) {
+            normalizedPrice = '$' + normalizedPrice;
+        }
+    }
+    
     const labelObj = {
         timestamp: Date.now(),
         type,
         name,
         item,
-        price: price || null
+        price: normalizedPrice
     };
+    
+    console.log(`[LABEL] Created: ${name} - ${item} - ${normalizedPrice || 'NO PRICE'}`);
     saveLabel(labelObj);
 
     if (isExcluded) {
-        console.log("🚫 EXCLUDED:", item);
+        console.log("[EXCLUDED]", item);
         res.json({ status: "excluded", reason: "Item matches exclusion filter" });
         return;
     }
 
     // Check giveaway printing setting
     if (type === 'giveaway' && !cfg.print_giveaways) {
-        console.log("🎁 GIVEAWAY EXCLUDED - printing disabled");
+        console.log("[GIVEAWAY] Excluded - printing disabled");
         res.json({ status: "excluded", reason: "Giveaway printing disabled" });
         return;
     }
 
     if (cfg.printing_enabled) {
-        console.log("✅ PRINTING");
+        console.log("[PRINTING]");
         const printer = require('./printer');
         printer.printLabel(labelObj);
     } else {
-        console.log("⏸️ PAUSED - logged only");
+        console.log("[PAUSED] Logged only");
     }
 
     res.json({ status: "ok" });
@@ -197,7 +224,11 @@ app.get('/status', (req, res) => {
         shows: cfg.shows || {},
         has_active_show: !!(cfg.current_show && cfg.shows[cfg.current_show]),
         extension_active: extensionActive,
-        last_extension_heartbeat: lastExtensionHeartbeat
+        last_extension_heartbeat: lastExtensionHeartbeat,
+        announce_to_chat: cfg.announce_to_chat || false,
+        chat_announce_patterns: cfg.chat_announce_patterns || [],
+        announce_wheel_spins: cfg.announce_wheel_spins !== undefined ? cfg.announce_wheel_spins : true,
+        pending_wheel_announcements: pendingWheelAnnouncements
     });
 });
 
@@ -263,10 +294,31 @@ app.post('/manual-print', (req, res) => {
     const cfg = loadConfig();
     const { type, name, item, price } = req.body;
     
+    // Debug logging for price tracking
+    logDebug('server-manual', 'manual-print', { type, name, item, price });
+    
+    // Enhanced price logging
+    console.log(`[MANUAL-PRINT] ${name} - ${item}${price ? ' - ' + price : ' (NO PRICE)'}`);
+    if (price !== undefined && price !== null) {
+        console.log(`[PRICE] Received: "${price}" (type: ${typeof price})`);
+    } else {
+        console.log(`[WARNING] No price received for manual print ${name} - ${item}`);
+    }
+    
     // Check if there's an active show
     if (!cfg.current_show || !cfg.shows[cfg.current_show]) {
         res.json({ status: "no_active_show", reason: "No active show - create a new show first" });
         return;
+    }
+    
+    // Normalize price: keep it if it's a valid string/number, otherwise null
+    let normalizedPrice = null;
+    if (price !== undefined && price !== null && price !== '' && price !== 'null' && price !== 'undefined') {
+        normalizedPrice = String(price).trim();
+        // Ensure it starts with $ if it's a number
+        if (normalizedPrice && !normalizedPrice.startsWith('$') && /^\d+(\.\d{2})?$/.test(normalizedPrice)) {
+            normalizedPrice = '$' + normalizedPrice;
+        }
     }
     
     // Create label object
@@ -274,10 +326,12 @@ app.post('/manual-print', (req, res) => {
         type: type,
         name: name,
         item: item, 
-        price: price,
+        price: normalizedPrice,
         timestamp: Date.now(),
         manual: true
     };
+    
+    console.log(`[LABEL] Manual created: ${name} - ${item} - ${normalizedPrice || 'NO PRICE'}`);
     
     // Save to labels (even if paused)
     saveLabel(labelObj);
@@ -308,6 +362,108 @@ app.get("/recent-wins", (req, res) => {
 app.get("/exclusions", (req, res) => {
     const cfg = loadConfig();
     res.json({ exclusions: cfg.exclusions || [] });
+});
+
+// Get chat announcement settings
+app.get("/chat-announce-settings", (req, res) => {
+    const cfg = loadConfig();
+    res.json({ 
+        announce_to_chat: cfg.announce_to_chat || false,
+        chat_announce_patterns: cfg.chat_announce_patterns || [],
+        announce_wheel_spins: cfg.announce_wheel_spins !== undefined ? cfg.announce_wheel_spins : true
+    });
+});
+
+// Update chat announcement settings
+app.post("/chat-announce-settings", (req, res) => {
+    try {
+        const { announce_to_chat, chat_announce_patterns, announce_wheel_spins } = req.body;
+        const cfg = loadConfig();
+        cfg.announce_to_chat = announce_to_chat !== undefined ? announce_to_chat : (cfg.announce_to_chat || false);
+        cfg.chat_announce_patterns = chat_announce_patterns || [];
+        if (announce_wheel_spins !== undefined) {
+            cfg.announce_wheel_spins = announce_wheel_spins;
+        }
+        fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
+        console.log("💬 Chat announcements:", cfg.announce_to_chat ? "ENABLED" : "DISABLED");
+        console.log("💬 Chat patterns:", cfg.chat_announce_patterns);
+        console.log("🎡 Wheel spin announcements:", cfg.announce_wheel_spins ? "ENABLED" : "DISABLED");
+        res.json({ 
+            status: "chat settings saved", 
+            announce_to_chat: cfg.announce_to_chat, 
+            chat_announce_patterns: cfg.chat_announce_patterns,
+            announce_wheel_spins: cfg.announce_wheel_spins !== undefined ? cfg.announce_wheel_spins : true
+        });
+    } catch (e) {
+        console.log("❌ Failed to save chat settings:", e.message);
+        res.status(500).json({ error: "failed to save chat settings" });
+    }
+});
+
+// Store for pending wheel announcements (in-memory queue)
+let pendingWheelAnnouncements = [];
+
+// Endpoint for wheel server to send win results
+app.post("/wheel-win", (req, res) => {
+    try {
+        const { title, buyer, price } = req.body;
+        
+        if (!title || !buyer) {
+            return res.status(400).json({ error: "Missing required fields: title and buyer" });
+        }
+        
+        const announcement = {
+            title: title,
+            buyer: buyer,
+            price: price || "",
+            timestamp: Date.now()
+        };
+        
+        pendingWheelAnnouncements.push(announcement);
+        console.log(`🎡 [WHEEL] Received wheel win from wheel server: ${buyer} won ${title}${price ? ' for ' + price : ''}`);
+        console.log(`🎡 [WHEEL] Pending announcements: ${pendingWheelAnnouncements.length}`);
+        
+        // Keep only last 100 announcements (prevent memory leak)
+        if (pendingWheelAnnouncements.length > 100) {
+            pendingWheelAnnouncements = pendingWheelAnnouncements.slice(-100);
+        }
+        
+        res.json({ status: "wheel win received", announcement });
+    } catch (e) {
+        console.log("❌ Failed to process wheel win:", e.message);
+        res.status(500).json({ error: "failed to process wheel win" });
+    }
+});
+
+// Endpoint for extension to get pending wheel announcements
+app.get("/pending-wheel-announcements", (req, res) => {
+    try {
+        // Return all pending announcements
+        res.json({ announcements: pendingWheelAnnouncements });
+    } catch (e) {
+        console.log("❌ Failed to get pending announcements:", e.message);
+        res.status(500).json({ error: "failed to get pending announcements" });
+    }
+});
+
+// Endpoint for extension to mark announcements as processed
+app.post("/clear-wheel-announcements", (req, res) => {
+    try {
+        const { count } = req.body;
+        if (count && count > 0) {
+            // Remove the specified number of announcements (oldest first)
+            pendingWheelAnnouncements = pendingWheelAnnouncements.slice(count);
+            console.log(`🎡 [WHEEL] Cleared ${count} announcements, ${pendingWheelAnnouncements.length} remaining`);
+        } else {
+            // Clear all if no count specified
+            pendingWheelAnnouncements = [];
+            console.log(`🎡 [WHEEL] Cleared all announcements`);
+        }
+        res.json({ status: "announcements cleared", remaining: pendingWheelAnnouncements.length });
+    } catch (e) {
+        console.log("❌ Failed to clear announcements:", e.message);
+        res.status(500).json({ error: "failed to clear announcements" });
+    }
 });
 
 // Update exclusions
@@ -474,8 +630,46 @@ app.post("/delete-show", (req, res) => {
     }
 });
 
+// Error handling to keep server alive and log errors
+process.on('uncaughtException', (error) => {
+    console.error('❌ UNCAUGHT EXCEPTION:', error);
+    console.error('Stack:', error.stack);
+    // Don't exit - keep server running
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ UNHANDLED REJECTION at:', promise);
+    console.error('Reason:', reason);
+    // Don't exit - keep server running
+});
+
+// Keep process alive
+process.on('SIGINT', () => {
+    console.log('\n🛑 Shutting down server...');
+    process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+    console.log('\n🛑 Shutting down server...');
+    process.exit(0);
+});
+
 const cfg = loadConfig();
-app.listen(cfg.port, () => {
-    console.log("Server running on port", cfg.port);
+const server = app.listen(cfg.port, () => {
+    console.log("✅ Server running on port", cfg.port);
     console.log("🔍 Extension debugging enabled - check /heartbeat and /extension-status");
+    console.log(`🐛 Debug logging enabled - logs saved to: ${path.join(__dirname, 'debug-logs')}`);
+    console.log("📡 Server is ready and waiting for requests...");
+    console.log("💡 Press Ctrl+C to stop the server\n");
+});
+
+// Handle server errors
+server.on('error', (error) => {
+    if (error.code === 'EADDRINUSE') {
+        console.error(`❌ Port ${cfg.port} is already in use!`);
+        console.error('💡 Try closing the other process or change the port in config.json');
+    } else {
+        console.error('❌ Server error:', error);
+    }
+    process.exit(1);
 });

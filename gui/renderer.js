@@ -77,6 +77,18 @@ function checkServerStatus() {
                 window.electronAPI.setAlwaysOnTop(isAlwaysOnTop);
             }
         }
+        
+        // Sync chat announcement checkbox
+        const chatAnnounceCheckbox = document.getElementById('announceToChatCheckbox');
+        if (chatAnnounceCheckbox && statusData.announce_to_chat !== undefined) {
+            chatAnnounceCheckbox.checked = statusData.announce_to_chat;
+        }
+        
+        // Sync wheel spin announcement checkbox
+        const wheelSpinsCheckbox = document.getElementById('announceWheelSpinsCheckbox');
+        if (wheelSpinsCheckbox && statusData.announce_wheel_spins !== undefined) {
+            wheelSpinsCheckbox.checked = statusData.announce_wheel_spins;
+        }
     })
     .catch(error => {
         console.log('Server status check failed:', error);
@@ -266,6 +278,69 @@ function loadExclusions() {
     });
 }
 
+// Load chat announcement settings on startup
+function loadChatAnnounceSettings() {
+    fetch('http://localhost:7777/chat-announce-settings')
+    .then(r => r.json())
+    .then(data => {
+        displayChatAnnouncePatterns(data.chat_announce_patterns);
+        const chatCheckbox = document.getElementById('announceToChatCheckbox');
+        if (chatCheckbox) {
+            chatCheckbox.checked = data.announce_to_chat || false;
+        }
+        const wheelCheckbox = document.getElementById('announceWheelSpinsCheckbox');
+        if (wheelCheckbox) {
+            wheelCheckbox.checked = data.announce_wheel_spins !== undefined ? data.announce_wheel_spins : true;
+        }
+    })
+    .catch(() => {
+        console.log('Failed to load chat announcement settings');
+    });
+}
+
+function displayChatAnnouncePatterns(patterns) {
+    const patternsDiv = document.getElementById('currentChatAnnounce');
+    if (!patternsDiv) return;
+    
+    if (patterns.length === 0) {
+        patternsDiv.innerHTML = '<em>No patterns set</em>';
+    } else {
+        patternsDiv.innerHTML = patterns.map(pattern => 
+            `<span class="exclusion-tag" onclick="removeChatAnnouncePattern('${pattern}')" title="Click to remove">${pattern} &times;</span>`
+        ).join('');
+    }
+}
+
+function removeChatAnnouncePattern(patternToRemove) {
+    // Get current settings
+    fetch('http://localhost:7777/chat-announce-settings')
+    .then(r => r.json())
+    .then(data => {
+        // Remove the selected pattern
+        const updatedPatterns = data.chat_announce_patterns.filter(pattern => pattern !== patternToRemove);
+        
+        // Save updated patterns
+        return fetch('http://localhost:7777/chat-announce-settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                announce_to_chat: data.announce_to_chat,
+                chat_announce_patterns: updatedPatterns
+            })
+        });
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'chat settings saved') {
+            log(`Removed chat pattern: "${patternToRemove}"`);
+            displayChatAnnouncePatterns(data.chat_announce_patterns);
+        }
+    })
+    .catch(e => {
+        log('Failed to remove chat pattern');
+    });
+}
+
 function displayExclusions(exclusions) {
     const exclusionsDiv = document.getElementById('currentExclusions');
     if (exclusions.length === 0) {
@@ -394,6 +469,124 @@ document.getElementById('printGiveawaysCheckbox').onchange = (e) => {
     .catch(e => {
         log('Failed to toggle giveaway printing');
         e.target.checked = !printGiveaways; // Revert checkbox
+    });
+};
+
+// Chat announcement checkbox handler
+document.getElementById('announceToChatCheckbox').onchange = (e) => {
+    const announceToChat = e.target.checked;
+    
+    // Get current settings first
+    fetch('http://localhost:7777/chat-announce-settings')
+    .then(r => r.json())
+    .then(currentSettings => {
+        return fetch('http://localhost:7777/chat-announce-settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                announce_to_chat: announceToChat,
+                chat_announce_patterns: currentSettings.chat_announce_patterns || [],
+                announce_wheel_spins: currentSettings.announce_wheel_spins !== undefined ? currentSettings.announce_wheel_spins : true
+            })
+        });
+    })
+    .then(r => r.json())
+    .then(data => {
+        log(`Chat announcements ${announceToChat ? 'enabled' : 'disabled'}`);
+    })
+    .catch(e => {
+        log('Failed to toggle chat announcements');
+        e.target.checked = !announceToChat; // Revert checkbox
+    });
+};
+
+// Wheel spin announcement checkbox handler
+document.getElementById('announceWheelSpinsCheckbox').onchange = (e) => {
+    const announceWheelSpins = e.target.checked;
+    
+    // Get current settings first
+    fetch('http://localhost:7777/chat-announce-settings')
+    .then(r => r.json())
+    .then(currentSettings => {
+        return fetch('http://localhost:7777/chat-announce-settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                announce_to_chat: currentSettings.announce_to_chat || false,
+                chat_announce_patterns: currentSettings.chat_announce_patterns || [],
+                announce_wheel_spins: announceWheelSpins
+            })
+        });
+    })
+    .then(r => r.json())
+    .then(data => {
+        log(`Wheel spin announcements ${announceWheelSpins ? 'enabled' : 'disabled'}`);
+    })
+    .catch(e => {
+        log('Failed to toggle wheel spin announcements');
+        e.target.checked = !announceWheelSpins; // Revert checkbox
+    });
+};
+
+document.getElementById('saveChatAnnounceBtn').onclick = () => {
+    const chatAnnounceBox = document.getElementById('chatAnnounceBox');
+    const patternsText = chatAnnounceBox.value.trim();
+    const patterns = patternsText ? patternsText.split(',').map(p => p.trim()).filter(p => p) : [];
+    
+    // Get current enabled state
+    fetch('http://localhost:7777/chat-announce-settings')
+    .then(r => r.json())
+    .then(currentSettings => {
+        return fetch('http://localhost:7777/chat-announce-settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                announce_to_chat: currentSettings.announce_to_chat || false,
+                chat_announce_patterns: patterns,
+                announce_wheel_spins: currentSettings.announce_wheel_spins !== undefined ? currentSettings.announce_wheel_spins : true
+            })
+        });
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'chat settings saved') {
+            log(`Chat patterns saved: ${data.chat_announce_patterns.length} patterns`);
+            displayChatAnnouncePatterns(data.chat_announce_patterns);
+            chatAnnounceBox.value = ''; // Clear the input after saving
+        }
+    })
+    .catch(e => {
+        log('Failed to save chat patterns');
+    });
+};
+
+document.getElementById('clearChatAnnounceBtn').onclick = () => {
+    const chatAnnounceBox = document.getElementById('chatAnnounceBox');
+    chatAnnounceBox.value = '';
+    
+    // Get current enabled state
+    fetch('http://localhost:7777/chat-announce-settings')
+    .then(r => r.json())
+    .then(currentSettings => {
+        return fetch('http://localhost:7777/chat-announce-settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                announce_to_chat: currentSettings.announce_to_chat || false,
+                chat_announce_patterns: [],
+                announce_wheel_spins: currentSettings.announce_wheel_spins !== undefined ? currentSettings.announce_wheel_spins : true
+            })
+        });
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'chat settings saved') {
+            log('All chat patterns cleared');
+            displayChatAnnouncePatterns([]);
+        }
+    })
+    .catch(e => {
+        log('Failed to clear chat patterns');
     });
 };
 
@@ -615,8 +808,9 @@ function checkForActiveShow() {
 function initialize() {
     log('AutoPrint GUI started');
     
-    // Load exclusions and current show
+    // Load exclusions, chat settings, and current show
     loadExclusions();
+    loadChatAnnounceSettings();
     loadCurrentShow();
     
     // Initial status check (this will sync the pause button automatically)
